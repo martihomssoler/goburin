@@ -1,0 +1,7 @@
+(( )){} // grouping stuff
+!*+-/=<> <= == // operators
+// this is a comment
+1234 1 4 664.5
+  5.678
+var language = "lox";
+"lox";
