@@ -1,4 +1,4 @@
-use std::{error::Error, io::Read};
+use std::error::Error;
 
 pub fn run_file(file_path: &str) -> Result<(), Box<dyn Error>> {
     let file_content = std::fs::read_to_string(file_path)?;
@@ -6,15 +6,25 @@ pub fn run_file(file_path: &str) -> Result<(), Box<dyn Error>> {
     run(&file_content)
 }
 pub fn run_prompt() -> Result<(), Box<dyn Error>> {
-    let mut input_content = String::new();
+    use std::io::{stdin, stdout, Write};
 
     loop {
+        let mut input = String::new();
         print!("> ");
-        std::io::stdin().read_to_string(&mut input_content)?;
-        if input_content.eq("exit") {
+        let _ = stdout().flush();
+        stdin().read_line(&mut input)?;
+
+        if let Some('\n') = input.chars().next_back() {
+            input.pop();
+        }
+        if let Some('\r') = input.chars().next_back() {
+            input.pop();
+        }
+
+        if input.eq("exit") {
             break;
         }
-        run(&input_content)?;
+        run(&input)?;
     }
 
     Ok(())
@@ -53,15 +63,19 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                 line += 1;
                 continue;
             }
+            '&' => TokenKind::AMPERSAND,
             '(' => TokenKind::LEFT_PARENTHESIS,
             ')' => TokenKind::RIGHT_PARENTHESIS,
             '{' => TokenKind::LEFT_BRACE,
             '}' => TokenKind::RIGHT_BRACE,
+            '[' => TokenKind::LEFT_BRACKET,
+            ']' => TokenKind::RIGHT_BRACKET,
             ',' => TokenKind::COMMA,
             '.' => TokenKind::DOT,
             '-' => TokenKind::MINUS,
             '+' => TokenKind::PLUS,
             ';' => TokenKind::SEMICOLON,
+            ':' => TokenKind::COLON,
             '*' => TokenKind::STAR,
             '!' => {
                 if next_char_matches(&mut char_iterator, &mut current, '=') {
@@ -92,6 +106,7 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                 }
             }
             '/' => {
+                // is sigle line comment "//"
                 if next_char_matches(&mut char_iterator, &mut current, '/') {
                     while let Some((_, c)) = char_iterator.peek()
                         && !c.eq(&'\n')
@@ -103,6 +118,17 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                     col = 1;
                     line += 1;
                     char_iterator.next();
+                    continue;
+                }
+                // is sigle line comment "//"
+                else if next_char_matches(&mut char_iterator, &mut current, '*') {
+                    multiline_comment(
+                        &mut char_iterator,
+                        &mut current,
+                        &mut start,
+                        &mut col,
+                        &mut line,
+                    );
                     continue;
                 } else {
                     TokenKind::SLASH
@@ -141,7 +167,7 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
 
                     TokenKind::NUMBER(parsed_number, number_length_in_chars)
                 } else if c.is_alphabetic() {
-                    continue;
+                    identifier_or_keyword(source, &mut char_iterator, &mut current, start)
                 } else {
                     return Err(format!("Unexpected character '{c}' at {line}:{col}").into());
                 }
@@ -153,6 +179,60 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
     }
 
     Ok(tokens)
+}
+
+fn identifier_or_keyword(
+    source: &str,
+    char_iterator: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    current: &mut usize,
+    start: usize,
+) -> TokenKind {
+    while let Some((_, c)) = char_iterator.peek()
+        && c.is_alphanumeric()
+    {
+        *current += 1;
+        char_iterator.next();
+    }
+
+    let value = source[start..*current].to_string();
+    if let Some(token_kind) = get_keyword(&value) {
+        token_kind
+    } else {
+        TokenKind::IDENTIFIER(value)
+    }
+}
+
+fn multiline_comment(
+    char_iterator: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    current: &mut usize,
+    start: &mut usize,
+    col: &mut i32,
+    line: &mut i32,
+) {
+    while let Some((_, c)) = char_iterator.next() {
+        *start = *current;
+        *current += 1;
+        *col += 1;
+
+        match c {
+            '\n' => {
+                *col = 1;
+                *line += 1;
+            }
+            '*' => {
+                if next_char_matches(char_iterator, current, '/') {
+                    return;
+                }
+            }
+
+            '/' => {
+                if next_char_matches(char_iterator, current, '*') {
+                    multiline_comment(char_iterator, current, start, col, line);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn consume_string(
@@ -207,15 +287,19 @@ fn next_char_matches(
 
 #[derive(Debug)]
 pub enum TokenKind {
+    AMPERSAND,
     LEFT_PARENTHESIS,
     RIGHT_PARENTHESIS,
     LEFT_BRACE,
     RIGHT_BRACE,
+    LEFT_BRACKET,
+    RIGHT_BRACKET,
     COMMA,
     DOT,
     MINUS,
     PLUS,
     SEMICOLON,
+    COLON,
     SLASH,
     STAR,
     BANG,
@@ -229,6 +313,7 @@ pub enum TokenKind {
     IDENTIFIER(String),
     STRING(String),
     NUMBER(f64, usize),
+    // keywords
     AND,
     ELSE,
     FALSE,
@@ -241,7 +326,7 @@ pub enum TokenKind {
     RETURN,
     TRUE,
     WHILE,
-
+    // misc
     EOF,
 }
 
@@ -255,15 +340,19 @@ impl Token {
     pub fn len(&self) -> usize {
         match &self.kind {
             // Token w/ length 1
-            TokenKind::LEFT_PARENTHESIS
+            TokenKind::AMPERSAND
+            | TokenKind::LEFT_PARENTHESIS
             | TokenKind::RIGHT_PARENTHESIS
             | TokenKind::LEFT_BRACE
             | TokenKind::RIGHT_BRACE
+            | TokenKind::LEFT_BRACKET
+            | TokenKind::RIGHT_BRACKET
             | TokenKind::COMMA
             | TokenKind::DOT
             | TokenKind::MINUS
             | TokenKind::PLUS
             | TokenKind::SEMICOLON
+            | TokenKind::COLON
             | TokenKind::SLASH
             | TokenKind::STAR
             | TokenKind::EQUAL
@@ -290,5 +379,22 @@ impl Token {
             TokenKind::STRING(s) => s.len(),
             TokenKind::NUMBER(_, i) => *i,
         }
+    }
+}
+
+fn get_keyword(identifier: &str) -> Option<TokenKind> {
+    match identifier {
+        "fn" => Some(TokenKind::FN),
+        "if" => Some(TokenKind::IF),
+        "or" => Some(TokenKind::OR),
+        "and" => Some(TokenKind::AND),
+        "else" => Some(TokenKind::ELSE),
+        "for" => Some(TokenKind::FOR),
+        "nil" => Some(TokenKind::NIL),
+        "print" => Some(TokenKind::PRINT),
+        "return" => Some(TokenKind::RETURN),
+        "true" => Some(TokenKind::TRUE),
+        "while" => Some(TokenKind::WHILE),
+        _ => None,
     }
 }

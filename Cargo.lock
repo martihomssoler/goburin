@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "goblin-lang"
+name = "goburin"
 version = "0.1.0"

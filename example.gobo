@@ -1,7 +1,55 @@
-(( )){} // grouping stuff
-!*+-/=<> <= == // operators
-// this is a comment
-1234 1 4 664.5
-  5.678
-var language = "lox";
-"lox";
+// --- Comments
+/* Block Comment */
+/* Nested Multi-
+	/* Line-
+		/* Block */ */ */
+
+// --- Naming Convention
+// - Varibles, base types (int, f64, ...) and functions are "snake_case"
+// - Types, also EnumVariants, are "PascalCase"
+// - Constrants and Generics, are "SCREAMING_SNAKE_CASE"
+
+// --- Variables
+// defined as "name : type = value"
+// where ":" is the type definition, and "=" is the value assignment.
+counter : int = 0
+boolean : bool = true
+name : string = "Goblin"
+average : float = 3.14
+// if the type is omitted then the compiler infers it based on the value
+counter := 0               // an int
+name := "Goblin"           // a string
+average := 3.14            // a float
+// if the value is omitted then you have a declaration without an initialization.
+counter : int
+name : string
+average : float
+
+// --- Pointers
+// pointers have the same idea as in Pascal, but changed the symbol to "&" since in too many languages the "^" is a "dead-key" which makes it hard to type
+pointer : &int= &5            // creating a pointer to an int
+value := pointer&             // dereferencing the pointer to its value (int)
+ptr : &int               // the default value for pointers is 0.
+
+// --- Arrays and Ranges
+// arrays are a homogeneous list and are declared as follows
+// we can declare arrays statically, they have a length at compile-time
+array : [8] float     // "8-long array of floats"
+array : [8] &float    // "8-long array of pointers to floats"
+array : &[8] float    // "pointer to an 8-long array floats"
+// or dynamically, same as Rust Vec (pointer, len, capacity)
+array : [..] float      // "dynamically-long array of floats"
+array : [..] &float     // "dynamically-long array of pointers to floats"
+array : &[..] float     // "pointer to a dynamically-long array floats"
+// if you do not want a u64 as the default index size, you could do
+array : [8:U8] float    // "dynamically-long array of floats w/ U8 index-size"
+array : [..:U8] float   // "8-long array of floats w/ U8 index-size"
+// ranges are sorted values with a start and end values
+a := 1..10             // range from 1 to 9
+a := 1..=10            // range from 1 to 10
+a := 1..=10:3          // range from 1 to 10 with steps of size 3
+// you can also do partial ranges
+a := ..=10             // range from 0 to 10
+a := 0..               // range from 0 to max int(max I32)
+// we can conbine both and declare an array of length 5 with content 1,2,3,4,5
+array := [..=5]
