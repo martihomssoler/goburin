@@ -44,7 +44,6 @@ Kansuu -> function (mathematics / programming)
 ^   
 ~   
 _
-;
 
 // -- Math Symbols
 we use keywords for the exponential and the modulo operator which are "pow" and "mod" respectively
@@ -54,6 +53,7 @@ we use keywords for the exponential and the modulo operator which are "pow" and 
 /   divide
 
 //others
+;   so far nothing, discussing statement terminator, results in ()
 =   asignment
 #   compiler directives
 $   reserved words
@@ -74,7 +74,7 @@ $   reserved words
 `
 
 // type aliases
-Float : F64            // f32, F64 
+float : F64            // f32, F64 
 Int: I32               // un/signed I8, U8, I16, U16, I32, U32, I64, u64, U128
 String : Char[]        // <-- TBD: to be decided
 Char :                 // <-- TBD: to be decided
@@ -88,24 +88,24 @@ Char :                 // <-- TBD: to be decided
 		/* Block */ */ */
 
 // --- Naming Convention
-// - Varibles and functions are "snake_case"
+// - Varibles, base types (int, f64, ...) and functions are "snake_case"
 // - Types, also EnumVariants, are "PascalCase"
 // - Constrants and Generics, are "SCREAMING_SNAKE_CASE"
 
 // --- Variables
 // defined as "name : type = value"
 // where ":" is the type definition, and "=" is the value assignment.
-counter : Int = 0
+counter : int = 0
 name : String = "Goblin"
-average : Float = 3.14
+average : float = 3.14
 // if the type is omitted then the compiler infers it based on the value
-counter := 0               // an Int
+counter := 0               // an int
 name := "Goblin"           // a String
-average := 3.14            // a Float
+average := 3.14            // a float
 // if the value is omitted then you have a declaration without an initialization.
-counter : Int
+counter : int
 name : String
-average : Float
+average : float
 
 // --- Pointers
 // pointers have the same idea as in Pascal, but changed the symbol to "&" since in too many languages the "^" is a "dead-key" which makes it hard to type
@@ -116,74 +116,75 @@ zero_ptr : &Int               // the default value for pointers is 0.
 // --- Arrays and Ranges
 // arrays are a homogeneous list and are declared as follows
 // we can declare arrays statically, they have a length at compile-time
-array : [8] Float     // "8-long array of Floats"
-array : [8] &Float    // "8-long array of pointers to Floats"
-array : &[8] Float    // "pointer to an 8-long array Floats"
+array : [8] float     // "8-long array of floats"
+array : [8] &float    // "8-long array of pointers to floats"
+array : &[8] float    // "pointer to an 8-long array floats"
 // or dynamically, same as Rust Vec (pointer, len, capacity)
-array : [..] Float      // "dynamically-long array of Floats"
-array : [..] &Float     // "dynamically-long array of pointers to Floats"
-array : &[..] Float     // "pointer to a dynamically-long array Floats"
+array : [..] float      // "dynamically-long array of floats"
+array : [..] &float     // "dynamically-long array of pointers to floats"
+array : &[..] float     // "pointer to a dynamically-long array floats"
 // if you do not want a u64 as the default index size, you could do
-array : [8:U8] Float    // "dynamically-long array of Floats w/ U8 index-size"
-array : [..:U8] Float   // "8-long array of Floats w/ U8 index-size"
+array : [8:U8] float    // "dynamically-long array of floats w/ U8 index-size"
+array : [..:U8] float   // "8-long array of floats w/ U8 index-size"
 // ranges are sorted values with a start and end values
 a := 1..10             // range from 1 to 9
 a := 1..=10            // range from 1 to 10
 a := 1..=10:3          // range from 1 to 10 with steps of size 3
 // you can also do partial ranges
 a := ..=10             // range from 0 to 10
-a := 0..               // range from 0 to max Int(max I32)
+a := 0..               // range from 0 to max int(max I32)
 // we can conbine both and declare an array of length 5 with content 1,2,3,4,5
 array := [..=5]
 
+// --- Types
+// every piece of data has a data type. By default, there are only a small set of data types defined, but custom types can be defined as "name :: type"
+// this is how "int" and "float" are defined
+int :: i32
+float :: f64
+
 // --- Tuples & Structs
 // tuples do not assign names to their members. In order to access them we use the "$" sign followed by their position, like $0, $1, ...
-tuple : (Int, Float)                         // <-- single line
-age_and_height : (                           // <-- multi line
-	Int,
-	Float,
+// both tuples and structs can be defined as "untyped", i.e. in situ like below
+tuple : (int, float)                         // <-- single line
+age_and_height : (                            // <-- multi line
+	int,
+	float,
 )
 // you can declare and give a default value
-another_tuple : (Int, Float) = (5, 3.14)     // <-- this is the default
-another_tuple : (Int, Float) = (_, 3.14)     // <-- partial defaults (0, 3.14)
-another_tuple : (Int, Float) = ($1:=3.14,..) // <-- same as ---^
+another_tuple : (int, float) = (5, 3.14)     // <-- this is the default
+another_tuple : (int, float) = (_, 3.14)     // <-- partial defaults (0, 3.14)
+another_tuple : (int, float) = ($1:=3.14,..) // <-- same as ---^
 // struct have named members, they are "named tuples". 
-node : (
-	owned_a : &node,
-	owned_b : &node,
-	value : Int,
+tuple_struct : (
+	value_a : int,
+	value_b : int,
 )
-node : (a : &node, b : &node, value : Int,)
-//          the last coma is optional ---^
+tuple_struct : (value_a : int, value_b : int,)
+//             the last coma is optional ---^
 // you can also give defaults, even partials, for structs
-another_node : node = (_, _, 0)              // <-- partial defaults
-another_node : node = (value := 0, ..)       // <-- same as ---^
+another_node : (value_a : int, value_b : int,) = (_, 0)                   
+//                               partial defaults ---^
+another_node : (value_a : int, value_b : int,) = (value_b := 0, ..)       
+// if you want to make recursive (or self-containing) data structures, we need "typed" structs, as shown below
+Node :: (
+	owned_a : &Node,
+	owned_b : &Node,
+	value : int,
+) = (value := 0, ..)                                 // <-- with defaults!
+
 
 // --- Enums
 // they let you group related values together, but unlike structs, they are a way to define that something is one of a set of other values.
 // To differenciate their one-of-a-set behaviour, we declare them using the "|>" pipe/matching symbol and with all caps.
-my_enum : (
+MyEnum :: (
 	|> Zero := 0,                      // untypped but infered
-	|> Num : (I32),                    // typed
-	|> Str : (String, String),         // typed w/ tuple
-	|> Other : (a: String, b: f32),    // typed w/ struct
+	|> Num : i32,                      // typed
+	|> Str : (string, string),         // typed w/ tuple
+	|> Other : (a: string, b: f32),    // typed w/ struct
 )
 // if you do not want a u64 as the default index size you can do as follows
-another_enum : (|> Zero, |> One, |> Two) : U8
+AnotherEnum :: (|> Zero, |> One, |> Two) : U8
 //             enum with "U8" as index ----^
-
-// --- Types
-// every piece of data has a data type. By default, there are only a small set of data types defined, but custom types can be defined as "name :: type"
-// this is how "int" and "Float" are defined
-Int:: F32
-Float :: F64
-// you can define new type for a struct with the following syntax
-Node :: (
-	owned_a : &Node,
-	owned_b : &Node,
-	value : Int,
-) = (value := 0, ..)                                  // <-- with defaults!
-// and enums like so
 AnotherEnum :: (|> Zero, |> One, |> Two) : U8 = One   // <-- with defaults
 // referencing an already defined value-type ----^
 
@@ -191,20 +192,24 @@ AnotherEnum :: (|> Zero, |> One, |> Two) : U8 = One   // <-- with defaults
 // there is no distiction between them, a "function" is a named lambda
 // types do not need to be explicitly defined because they can be infered
 // the format to define a function is as follows
-// "name := (parameters) -> return <capture> { code }"
+// "name := parameters -> return <capture> { code }"
+// note that "parameters" can be any typed or untyped collection
 // this format gives us the following four possibilities
-// 						 		    { code } <-- Anonymous code block
-//					      <capture> { code } <-- Captured code block
-//      (i: int) -> Float <capture> { code } <-- Anonymous function aka a lambda
-// f := (i: int) -> Float <capture> { code } <-- Named function
+// 						 		      { code } <-- Anonymous code block
+//					        <capture> { code } <-- Captured code block
+//         params -> return <capture> { code } <-- Lambda
+// name := params -> return <capture> { code } <-- Function
 // for example:
 // w/ 0 arguments and return value
-five := () -> Int { 5 }
+five := () -> int { 5 }
 // w/ unnamed arguments and return value
-square := (Float) -> Float { $0 * $0 }
+square := (float) -> float { $0 * $0 }
 // w/ arguments but no return. 
 // empty returns are optional, but code bodies are mandatory even if empty
-nothing := (a:Float) { }
+nothing := (a:float) { }
+// w/ a typed struct as argument and no return.
+// a Node is just a named collection, aka a struct, we have defined it before
+node_nothing := n:Node { }
 // w/ untyped arguments they get mono-morphizied at compile-time
 // we must make explicit that we are using the global print function
 //                    v----- explicit capture of global print function
@@ -217,7 +222,7 @@ print := (a) -> () <<print>> { print "{a}" }
 // --- Generics
 // the type is determined by the GENERIC_TYPE preceded by the "$" symbol
 sum := (a: $T, b: T) -> T { a + b }
-// e.g. calling the code above with "sum(Int, Int)", results in  "T = Int".
+// e.g. calling the code above with "sum(int, int)", results in  "T = int".
 // failing to provide a GENERIC_TYPE preceeded by a "$" is an error
 
 // --- Results & Options
@@ -238,7 +243,7 @@ Option :: (
 ```cpp
 // function calls have a similar "dot notation" as koka
 // function with nammed arguments
-multiply : (x: Float, y: Float) -> Float = x * y
+multiply : (x: float, y: float) -> float = x * y
 (3.0,5.0).multiply               // calling with a tuple (unnamed members)
 (a:=3.0,b:=5.0).multiply         // calling with a struct (nammed members)
 
