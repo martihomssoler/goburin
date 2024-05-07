@@ -1,4 +1,10 @@
-use std::error::Error;
+pub mod parser;
+
+use std::{error::Error, fmt::Display};
+
+use crate::ParserResult;
+
+use self::parser::Parser;
 
 pub fn run_file(file_path: &str) -> Result<(), Box<dyn Error>> {
     let file_content = std::fs::read_to_string(file_path)?;
@@ -32,9 +38,18 @@ pub fn run_prompt() -> Result<(), Box<dyn Error>> {
 
 fn run(source: &str) -> Result<(), Box<dyn Error>> {
     let tokens = scan_tokens(source)?;
-
-    for token in tokens {
-        println!("{token:?}");
+    // for token in &tokens {
+    //     println!("{token:?}");
+    // }
+    let expr = Parser::new(tokens).parse()?;
+    // println!("{expr}");
+    match parser::interpret(&expr) {
+        Ok(value) => {
+            println!("{value:?}");
+        }
+        Err(err) => {
+            println!("{} \n    [Error on line {}]", err.message, err.line);
+        }
     }
 
     Ok(())
@@ -46,11 +61,11 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
     let mut start = 0;
     let mut current = 0;
 
-    let mut col = 1;
-    let mut line = 1;
+    let mut col: usize = 1;
+    let mut line: usize = 1;
 
-    let mut char_iterator = source.char_indices().peekable();
-    while let Some((len, c)) = char_iterator.next() {
+    let mut char_iterator = source.chars().peekable();
+    while let Some(c) = char_iterator.next() {
         start = current;
         current += 1;
 
@@ -63,52 +78,52 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                 line += 1;
                 continue;
             }
-            '&' => TokenKind::AMPERSAND,
-            '(' => TokenKind::LEFT_PARENTHESIS,
-            ')' => TokenKind::RIGHT_PARENTHESIS,
-            '{' => TokenKind::LEFT_BRACE,
-            '}' => TokenKind::RIGHT_BRACE,
-            '[' => TokenKind::LEFT_BRACKET,
-            ']' => TokenKind::RIGHT_BRACKET,
-            ',' => TokenKind::COMMA,
-            '.' => TokenKind::DOT,
-            '-' => TokenKind::MINUS,
-            '+' => TokenKind::PLUS,
-            ';' => TokenKind::SEMICOLON,
-            ':' => TokenKind::COLON,
-            '*' => TokenKind::STAR,
+            '&' => TokenKind::Ampersand,
+            '(' => TokenKind::LeftParenthesis,
+            ')' => TokenKind::RightParenthesis,
+            '{' => TokenKind::LeftBrace,
+            '}' => TokenKind::RightBrace,
+            '[' => TokenKind::LeftBracket,
+            ']' => TokenKind::RightBracket,
+            ',' => TokenKind::Comma,
+            '.' => TokenKind::Dot,
+            '-' => TokenKind::Minus,
+            '+' => TokenKind::Plus,
+            ';' => TokenKind::Semicolon,
+            ':' => TokenKind::Colon,
+            '*' => TokenKind::Star,
             '!' => {
                 if next_char_matches(&mut char_iterator, &mut current, '=') {
-                    TokenKind::BANG_EQUAL
+                    TokenKind::BangEqual
                 } else {
-                    TokenKind::BANG
+                    TokenKind::Bang
                 }
             }
             '=' => {
                 if next_char_matches(&mut char_iterator, &mut current, '=') {
-                    TokenKind::EQUAL_EQUAL
+                    TokenKind::EqualEqual
                 } else {
-                    TokenKind::EQUAL
+                    TokenKind::Equal
                 }
             }
             '<' => {
                 if next_char_matches(&mut char_iterator, &mut current, '=') {
-                    TokenKind::LESS_EQUAL
+                    TokenKind::LessEqual
                 } else {
-                    TokenKind::LESS
+                    TokenKind::Less
                 }
             }
             '>' => {
                 if next_char_matches(&mut char_iterator, &mut current, '=') {
-                    TokenKind::GREATER_EQUAL
+                    TokenKind::GreaterEqual
                 } else {
-                    TokenKind::GREATER
+                    TokenKind::Greater
                 }
             }
             '/' => {
                 // is sigle line comment "//"
                 if next_char_matches(&mut char_iterator, &mut current, '/') {
-                    while let Some((_, c)) = char_iterator.peek()
+                    while let Some(c) = char_iterator.peek()
                         && !c.eq(&'\n')
                     {
                         current += 1;
@@ -131,7 +146,7 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                     );
                     continue;
                 } else {
-                    TokenKind::SLASH
+                    TokenKind::Slash
                 }
             }
             '"' => {
@@ -145,7 +160,7 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                 let value = source[start..current].to_string();
                 current += 1;
                 char_iterator.next();
-                TokenKind::STRING(value)
+                TokenKind::String(value)
             }
             c => {
                 if c.is_ascii_digit() {
@@ -153,7 +168,7 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
 
                     // Look for a fractional part
                     if next_char_matches(&mut char_iterator, &mut current, '.')
-                        && let Some((_, c)) = char_iterator.peek()
+                        && let Some(c) = char_iterator.peek()
                         && c.is_ascii_digit()
                     {
                         consume_digits(&mut char_iterator, &mut current);
@@ -162,10 +177,7 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
                     let number_length_in_chars = current - start;
                     let parsed_number = value.parse::<f64>()?;
 
-                    current += 1;
-                    char_iterator.next();
-
-                    TokenKind::NUMBER(parsed_number, number_length_in_chars)
+                    TokenKind::Number(parsed_number, number_length_in_chars)
                 } else if c.is_alphabetic() {
                     identifier_or_keyword(source, &mut char_iterator, &mut current, start)
                 } else {
@@ -174,20 +186,25 @@ fn scan_tokens(source: &str) -> Result<Vec<Token>, Box<dyn Error>> {
             }
         };
 
-        start = current;
-        tokens.push(Token { kind, start });
+        tokens.push(Token { kind, start, line });
     }
+
+    tokens.push(Token {
+        kind: TokenKind::EOF,
+        start,
+        line,
+    });
 
     Ok(tokens)
 }
 
 fn identifier_or_keyword(
     source: &str,
-    char_iterator: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    char_iterator: &mut PeekableChars,
     current: &mut usize,
     start: usize,
 ) -> TokenKind {
-    while let Some((_, c)) = char_iterator.peek()
+    while let Some(c) = char_iterator.peek()
         && c.is_alphanumeric()
     {
         *current += 1;
@@ -198,18 +215,18 @@ fn identifier_or_keyword(
     if let Some(token_kind) = get_keyword(&value) {
         token_kind
     } else {
-        TokenKind::IDENTIFIER(value)
+        TokenKind::Identifier(value)
     }
 }
 
 fn multiline_comment(
-    char_iterator: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    char_iterator: &mut PeekableChars,
     current: &mut usize,
     start: &mut usize,
-    col: &mut i32,
-    line: &mut i32,
+    col: &mut usize,
+    line: &mut usize,
 ) {
-    while let Some((_, c)) = char_iterator.next() {
+    while let Some(c) = char_iterator.next() {
         *start = *current;
         *current += 1;
         *col += 1;
@@ -236,12 +253,12 @@ fn multiline_comment(
 }
 
 fn consume_string(
-    char_iterator: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    char_iterator: &mut PeekableChars,
     current: &mut usize,
-    col: &mut i32,
-    line: &mut i32,
+    col: &mut usize,
+    line: &mut usize,
 ) {
-    while let Some((_, c)) = char_iterator.peek()
+    while let Some(c) = char_iterator.peek()
         && !c.eq(&'"')
     {
         *current += 1;
@@ -253,11 +270,8 @@ fn consume_string(
     }
 }
 
-fn consume_digits(
-    char_iterator: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    current: &mut usize,
-) {
-    while let Some((_, c)) = char_iterator.peek()
+fn consume_digits(char_iterator: &mut PeekableChars, current: &mut usize) {
+    while let Some(c) = char_iterator.peek()
         && c.is_ascii_digit()
     {
         *current += 1;
@@ -265,14 +279,10 @@ fn consume_digits(
     }
 }
 
-type PeekableCharIndices<'a> = std::iter::Peekable<std::str::CharIndices<'a>>;
+type PeekableChars<'a> = std::iter::Peekable<std::str::Chars<'a>>;
 
-fn next_char_matches(
-    iterator: &mut PeekableCharIndices,
-    current: &mut usize,
-    expected: char,
-) -> bool {
-    if let Some((_, c)) = iterator.peek() {
+fn next_char_matches(iterator: &mut PeekableChars, current: &mut usize, expected: char) -> bool {
+    if let Some(c) = iterator.peek() {
         if expected.eq(c) {
             iterator.next();
             *current += 1;
@@ -285,116 +295,171 @@ fn next_char_matches(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TokenKind {
-    AMPERSAND,
-    LEFT_PARENTHESIS,
-    RIGHT_PARENTHESIS,
-    LEFT_BRACE,
-    RIGHT_BRACE,
-    LEFT_BRACKET,
-    RIGHT_BRACKET,
-    COMMA,
-    DOT,
-    MINUS,
-    PLUS,
-    SEMICOLON,
-    COLON,
-    SLASH,
-    STAR,
-    BANG,
-    BANG_EQUAL,
-    EQUAL,
-    EQUAL_EQUAL,
-    GREATER,
-    GREATER_EQUAL,
-    LESS,
-    LESS_EQUAL,
-    IDENTIFIER(String),
-    STRING(String),
-    NUMBER(f64, usize),
+    Ampersand,
+    LeftParenthesis,
+    RightParenthesis,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    Comma,
+    Dot,
+    Minus,
+    Plus,
+    Semicolon,
+    Colon,
+    Slash,
+    Star,
+    Bang,
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    Identifier(String),
+    String(String),
+    Number(f64, usize),
     // keywords
-    AND,
-    ELSE,
-    FALSE,
-    FN,
-    FOR,
-    IF,
-    NIL,
-    OR,
-    PRINT,
-    RETURN,
-    TRUE,
-    WHILE,
+    And,
+    Else,
+    False,
+    Fn,
+    For,
+    If,
+    Nil,
+    Or,
+    Print,
+    Return,
+    True,
+    While,
     // misc
+    #[allow(clippy::upper_case_acronyms)]
     EOF,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
-    kind: TokenKind,
-    start: usize,
+    pub kind: TokenKind,
+    pub start: usize,
+    pub line: usize,
 }
 
 impl Token {
     pub fn len(&self) -> usize {
         match &self.kind {
             // Token w/ length 1
-            TokenKind::AMPERSAND
-            | TokenKind::LEFT_PARENTHESIS
-            | TokenKind::RIGHT_PARENTHESIS
-            | TokenKind::LEFT_BRACE
-            | TokenKind::RIGHT_BRACE
-            | TokenKind::LEFT_BRACKET
-            | TokenKind::RIGHT_BRACKET
-            | TokenKind::COMMA
-            | TokenKind::DOT
-            | TokenKind::MINUS
-            | TokenKind::PLUS
-            | TokenKind::SEMICOLON
-            | TokenKind::COLON
-            | TokenKind::SLASH
-            | TokenKind::STAR
-            | TokenKind::EQUAL
-            | TokenKind::GREATER
-            | TokenKind::LESS
-            | TokenKind::BANG => 1,
+            TokenKind::Ampersand
+            | TokenKind::LeftParenthesis
+            | TokenKind::RightParenthesis
+            | TokenKind::LeftBrace
+            | TokenKind::RightBrace
+            | TokenKind::LeftBracket
+            | TokenKind::RightBracket
+            | TokenKind::Comma
+            | TokenKind::Dot
+            | TokenKind::Minus
+            | TokenKind::Plus
+            | TokenKind::Semicolon
+            | TokenKind::Colon
+            | TokenKind::Slash
+            | TokenKind::Star
+            | TokenKind::Equal
+            | TokenKind::Greater
+            | TokenKind::Less
+            | TokenKind::Bang => 1,
             // Token w/ length 2
-            TokenKind::BANG_EQUAL
-            | TokenKind::EQUAL_EQUAL
-            | TokenKind::GREATER_EQUAL
-            | TokenKind::FN
-            | TokenKind::IF
-            | TokenKind::OR
-            | TokenKind::LESS_EQUAL => 2,
+            TokenKind::BangEqual
+            | TokenKind::EqualEqual
+            | TokenKind::GreaterEqual
+            | TokenKind::Fn
+            | TokenKind::If
+            | TokenKind::Or
+            | TokenKind::LessEqual => 2,
             // Token w/ length 3
-            TokenKind::FOR | TokenKind::NIL | TokenKind::EOF | TokenKind::AND => 3,
+            TokenKind::For | TokenKind::Nil | TokenKind::EOF | TokenKind::And => 3,
             // Token w/ length 4
-            TokenKind::TRUE | TokenKind::ELSE => 4,
+            TokenKind::True | TokenKind::Else => 4,
             // Token w/ length 5
-            TokenKind::PRINT | TokenKind::WHILE | TokenKind::FALSE => 5,
+            TokenKind::Print | TokenKind::While | TokenKind::False => 5,
             // Token w/ length 6
-            TokenKind::RETURN => 6,
-            TokenKind::IDENTIFIER(i) => i.len(),
-            TokenKind::STRING(s) => s.len(),
-            TokenKind::NUMBER(_, i) => *i,
+            TokenKind::Return => 6,
+            TokenKind::Identifier(i) => i.len(),
+            TokenKind::String(s) => s.len(),
+            TokenKind::Number(_, i) => *i,
         }
     }
 }
 
 fn get_keyword(identifier: &str) -> Option<TokenKind> {
     match identifier {
-        "fn" => Some(TokenKind::FN),
-        "if" => Some(TokenKind::IF),
-        "or" => Some(TokenKind::OR),
-        "and" => Some(TokenKind::AND),
-        "else" => Some(TokenKind::ELSE),
-        "for" => Some(TokenKind::FOR),
-        "nil" => Some(TokenKind::NIL),
-        "print" => Some(TokenKind::PRINT),
-        "return" => Some(TokenKind::RETURN),
-        "true" => Some(TokenKind::TRUE),
-        "while" => Some(TokenKind::WHILE),
+        "fn" => Some(TokenKind::Fn),
+        "if" => Some(TokenKind::If),
+        "or" => Some(TokenKind::Or),
+        "and" => Some(TokenKind::And),
+        "else" => Some(TokenKind::Else),
+        "for" => Some(TokenKind::For),
+        "nil" => Some(TokenKind::Nil),
+        "print" => Some(TokenKind::Print),
+        "return" => Some(TokenKind::Return),
+        "true" => Some(TokenKind::True),
+        "false" => Some(TokenKind::False),
+        "while" => Some(TokenKind::While),
         _ => None,
+    }
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.kind.fmt(f)
+    }
+}
+
+impl Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenKind::Ampersand => f.write_str("&"),
+            TokenKind::LeftParenthesis => f.write_str("("),
+            TokenKind::RightParenthesis => f.write_str(")"),
+            TokenKind::LeftBrace => f.write_str("{"),
+            TokenKind::RightBrace => f.write_str("}"),
+            TokenKind::LeftBracket => f.write_str("["),
+            TokenKind::RightBracket => f.write_str("]"),
+            TokenKind::Comma => f.write_str(","),
+            TokenKind::Dot => f.write_str("."),
+            TokenKind::Minus => f.write_str("-"),
+            TokenKind::Plus => f.write_str("+"),
+            TokenKind::Semicolon => f.write_str(";"),
+            TokenKind::Colon => f.write_str(":"),
+            TokenKind::Slash => f.write_str("/"),
+            TokenKind::Star => f.write_str("*"),
+            TokenKind::Bang => f.write_str("!"),
+            TokenKind::BangEqual => f.write_str("!="),
+            TokenKind::Equal => f.write_str("="),
+            TokenKind::EqualEqual => f.write_str("=="),
+            TokenKind::Greater => f.write_str(">"),
+            TokenKind::GreaterEqual => f.write_str(">="),
+            TokenKind::Less => f.write_str("<"),
+            TokenKind::LessEqual => f.write_str("<="),
+            TokenKind::Identifier(id) => f.write_fmt(format_args!("{id}")),
+            TokenKind::String(s) => f.write_fmt(format_args!("{s}")),
+            TokenKind::Number(n, _) => f.write_fmt(format_args!("{n}")),
+            TokenKind::And => f.write_str("and"),
+            TokenKind::Else => f.write_str("else"),
+            TokenKind::False => f.write_str("false"),
+            TokenKind::Fn => f.write_str("fn"),
+            TokenKind::For => f.write_str("for"),
+            TokenKind::If => f.write_str("if"),
+            TokenKind::Nil => f.write_str("nil"),
+            TokenKind::Or => f.write_str("or"),
+            TokenKind::Print => f.write_str("print"),
+            TokenKind::Return => f.write_str("return"),
+            TokenKind::True => f.write_str("true"),
+            TokenKind::While => f.write_str("while"),
+            TokenKind::EOF => f.write_str("EOF"),
+        }
     }
 }

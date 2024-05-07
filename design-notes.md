@@ -263,4 +263,18 @@ each(0..10, i -> print "{i}")
 
 ```
 
+# CFG
 
+```
+expression   -> literal
+							| unary
+							| binary
+							| grouping ;
+
+literal			 -> NUMBER | STRING | "true" | "false" | "nil" ;
+grouping     -> "(" expression ")" ;
+unary        -> ( "-" | "!" ) expression ;
+binary       -> expression operator expression ;
+operator     -> "==" | "!=" | "<" | "<=" | ">" | ">=" 
+							| "+" | "-" | "*" | "/" ;
+```
