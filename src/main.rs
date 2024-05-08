@@ -1,6 +1,6 @@
 #![feature(let_chains)]
 
-mod lexer;
-mod token;
+pub mod parser;
+pub mod tokenizer;
 
 fn main() {}
