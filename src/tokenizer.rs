@@ -81,6 +81,7 @@ impl<'a> Tokenizer<'a> {
             ';' => self.add_token(TokenKind::Semicolon),
             ':' => self.add_token(TokenKind::Colon),
             '*' => self.add_token(TokenKind::Star),
+            '?' => self.add_token(TokenKind::Question),
             '!' => {
                 self.match_char_and_add_token('=', TokenKind::BangEqual, TokenKind::Bang);
             }
@@ -233,12 +234,11 @@ impl<'a> Tokenizer<'a> {
         }
 
         let value = self.source[self.start_pos..self.current_pos].to_string();
-        let number_length_in_chars = self.current_pos - self.start_pos;
         let parsed_number = value.parse::<f64>().map_err(|e| {
             TokenizerError::new_unknown_error(e.to_string(), self.line, self.column)
         })?;
 
-        self.add_token(TokenKind::Number(parsed_number, number_length_in_chars));
+        self.add_token(TokenKind::Number(parsed_number));
 
         Ok(())
     }
@@ -264,7 +264,7 @@ impl<'a> Tokenizer<'a> {
 
         let value = self.source[self.start_pos..self.current_pos].to_string();
         self.next();
-        self.add_token(TokenKind::String(value));
+        self.add_token(TokenKind::Str(value));
         Ok(())
     }
 
@@ -357,48 +357,10 @@ impl Token {
             line,
         }
     }
+
+    #[inline(always)]
     pub fn size(&self) -> usize {
-        match &self.kind {
-            // Token w/ length 1
-            TokenKind::Ampersand
-            | TokenKind::LeftParenthesis
-            | TokenKind::RightParenthesis
-            | TokenKind::LeftBrace
-            | TokenKind::RightBrace
-            | TokenKind::LeftBracket
-            | TokenKind::RightBracket
-            | TokenKind::Comma
-            | TokenKind::Dot
-            | TokenKind::Minus
-            | TokenKind::Plus
-            | TokenKind::Semicolon
-            | TokenKind::Colon
-            | TokenKind::Slash
-            | TokenKind::Star
-            | TokenKind::Equal
-            | TokenKind::Greater
-            | TokenKind::Less
-            | TokenKind::Bang => 1,
-            // Token w/ length 2
-            TokenKind::BangEqual
-            | TokenKind::EqualEqual
-            | TokenKind::GreaterEqual
-            | TokenKind::Fn
-            | TokenKind::If
-            | TokenKind::Or
-            | TokenKind::LessEqual => 2,
-            // Token w/ length 3
-            TokenKind::For | TokenKind::Nil | TokenKind::EOF | TokenKind::And => 3,
-            // Token w/ length 4
-            TokenKind::True | TokenKind::Else => 4,
-            // Token w/ length 5
-            TokenKind::Print | TokenKind::While | TokenKind::False => 5,
-            // Token w/ length 6
-            TokenKind::Return => 6,
-            TokenKind::Identifier(i) => i.len(),
-            TokenKind::String(s) => s.len(),
-            TokenKind::Number(_, i) => *i,
-        }
+        self.end - self.start
     }
 }
 
@@ -425,6 +387,7 @@ pub enum TokenKind {
     Colon,
     Slash,
     Star,
+    Question,
     Bang,
     BangEqual,
     Equal,
@@ -434,8 +397,8 @@ pub enum TokenKind {
     Less,
     LessEqual,
     Identifier(String),
-    String(String),
-    Number(f64, usize),
+    Str(String),
+    Number(f64),
     // keywords
     And,
     Else,
@@ -490,6 +453,7 @@ impl Display for TokenKind {
             TokenKind::Colon => f.write_str(":"),
             TokenKind::Slash => f.write_str("/"),
             TokenKind::Star => f.write_str("*"),
+            TokenKind::Question => f.write_str("?"),
             TokenKind::Bang => f.write_str("!"),
             TokenKind::BangEqual => f.write_str("!="),
             TokenKind::Equal => f.write_str("="),
@@ -499,8 +463,8 @@ impl Display for TokenKind {
             TokenKind::Less => f.write_str("<"),
             TokenKind::LessEqual => f.write_str("<="),
             TokenKind::Identifier(id) => f.write_fmt(format_args!("{id}")),
-            TokenKind::String(s) => f.write_fmt(format_args!("{s}")),
-            TokenKind::Number(n, _) => f.write_fmt(format_args!("{n}")),
+            TokenKind::Str(s) => f.write_fmt(format_args!("{s}")),
+            TokenKind::Number(n) => f.write_fmt(format_args!("{n}")),
             TokenKind::And => f.write_str("and"),
             TokenKind::Else => f.write_str("else"),
             TokenKind::False => f.write_str("false"),
@@ -556,7 +520,7 @@ mod tests {
 
     #[test]
     fn single_or_double_char_tokens() -> TokenizerResult<()> {
-        let source = "! != == = < <= > >=";
+        let source = "! != == = < <= > >= ?";
         let expected_tokens = [
             Token::new(Bang, 0, 1, 1),
             Token::new(BangEqual, 2, 4, 1),
@@ -566,7 +530,8 @@ mod tests {
             Token::new(LessEqual, 12, 14, 1),
             Token::new(Greater, 15, 16, 1),
             Token::new(GreaterEqual, 17, 19, 1),
-            Token::new(EOF, 19, 19, 1),
+            Token::new(Question, 20, 21, 1),
+            Token::new(EOF, 21, 21, 1),
         ]
         .to_vec();
 
@@ -608,14 +573,12 @@ mod tests {
              Comment"
         "#;
         let expected_tokens = [
-            Token::new(String("Comment1".to_owned()), 15, 24, 2),
-            Token::new(String("Comment2".to_owned()), 38, 47, 3),
+            Token::new(Str("Comment1".to_owned()), 15, 24, 2),
+            Token::new(Str("Comment2".to_owned()), 38, 47, 3),
             Token::new(
-                String(
-                    "Multi-line
+                Str("Multi-line
              Comment"
-                        .to_owned(),
-                ),
+                    .to_owned()),
                 61,
                 93,
                 5,
@@ -638,9 +601,9 @@ mod tests {
     fn numbers_correct() -> TokenizerResult<()> {
         let source = "3 3.13 3pi";
         let expected_tokens = [
-            Token::new(Number(3.0, 1), 0, 1, 1),
-            Token::new(Number(3.13, 4), 2, 6, 1),
-            Token::new(Number(3.0, 1), 7, 8, 1),
+            Token::new(Number(3.0), 0, 1, 1),
+            Token::new(Number(3.13), 2, 6, 1),
+            Token::new(Number(3.0), 7, 8, 1),
             Token::new(Identifier("pi".to_owned()), 8, 10, 1),
             Token::new(EOF, 10, 10, 1),
         ]
