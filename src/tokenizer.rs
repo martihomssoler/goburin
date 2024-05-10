@@ -77,7 +77,9 @@ impl<'a> Tokenizer<'a> {
             ',' => self.add_token(TokenKind::Comma),
             '.' => self.add_token(TokenKind::Dot),
             '-' => self.add_token(TokenKind::Minus),
-            '+' => self.add_token(TokenKind::Plus),
+            '+' => {
+                self.match_char_and_add_token('+', TokenKind::PlusPlus, TokenKind::Plus);
+            }
             ';' => self.add_token(TokenKind::Semicolon),
             ':' => self.add_token(TokenKind::Colon),
             '*' => self.add_token(TokenKind::Star),
@@ -383,6 +385,7 @@ pub enum TokenKind {
     Dot,
     Minus,
     Plus,
+    PlusPlus,
     Semicolon,
     Colon,
     Slash,
@@ -449,6 +452,7 @@ impl Display for TokenKind {
             TokenKind::Dot => f.write_str("."),
             TokenKind::Minus => f.write_str("-"),
             TokenKind::Plus => f.write_str("+"),
+            TokenKind::PlusPlus => f.write_str("++"),
             TokenKind::Semicolon => f.write_str(";"),
             TokenKind::Colon => f.write_str(":"),
             TokenKind::Slash => f.write_str("/"),
@@ -571,6 +575,7 @@ mod tests {
             "Comment2"
             "Multi-line
              Comment"
+        "a"++"b"
         "#;
         let expected_tokens = [
             Token::new(Str("Comment1".to_owned()), 15, 24, 2),
@@ -583,7 +588,10 @@ mod tests {
                 93,
                 5,
             ),
-            Token::new(EOF, 102, 102, 6),
+            Token::new(Str("a".to_owned()), 103, 105, 6),
+            Token::new(PlusPlus, 105, 107, 6),
+            Token::new(Str("b".to_owned()), 108, 110, 6),
+            Token::new(EOF, 119, 119, 7),
         ]
         .to_vec();
 
@@ -644,6 +652,27 @@ mod tests {
             Token::new(Minus, 38, 39, 1),
             Token::new(Fn, 39, 41, 1),
             Token::new(EOF, 41, 41, 1),
+        ]
+        .to_vec();
+
+        let actual_tokens = Tokenizer::tokenize(source)?;
+
+        actual_tokens
+            .iter()
+            .zip(expected_tokens.iter())
+            .for_each(|(actual, expected)| assert_eq!(actual, expected));
+
+        Ok(())
+    }
+
+    #[test]
+    fn print() -> TokenizerResult<()> {
+        let source = r#"print "muffin";"#;
+        let expected_tokens = [
+            Token::new(Print, 0, 5, 1),
+            Token::new(Str("muffin".to_owned()), 7, 14, 1),
+            Token::new(Semicolon, 14, 15, 1),
+            Token::new(EOF, 15, 15, 1),
         ]
         .to_vec();
 
