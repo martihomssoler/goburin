@@ -685,4 +685,31 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn blocks() -> TokenizerResult<()> {
+        let source = "{x=1;print x;}";
+        let expected_tokens = [
+            Token::new(LeftBrace, 0, 1, 1),
+            Token::new(Identifier("x".to_string()), 1, 2, 1),
+            Token::new(Equal, 2, 3, 1),
+            Token::new(Number(1.0), 3, 4, 1),
+            Token::new(Semicolon, 4, 5, 1),
+            Token::new(Print, 5, 10, 1),
+            Token::new(Identifier("x".to_string()), 11, 12, 1),
+            Token::new(Semicolon, 12, 13, 1),
+            Token::new(RightBrace, 13, 14, 1),
+            Token::new(EOF, 14, 14, 1),
+        ]
+        .to_vec();
+
+        let actual_tokens = Tokenizer::tokenize(source)?;
+
+        actual_tokens
+            .iter()
+            .zip(expected_tokens.iter())
+            .for_each(|(actual, expected)| assert_eq!(actual, expected));
+
+        Ok(())
+    }
 }

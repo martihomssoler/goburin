@@ -61,7 +61,7 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         Self {
-            env: Environment::new(),
+            env: Environment::new(None),
         }
     }
 
@@ -71,17 +71,17 @@ impl Interpreter {
         let mut res = InterpreterValue::Nothing;
 
         for stmt in stmts {
-            res = self.evaluate_sexpr(&stmt)?;
+            res = self.evaluate_stmt(&stmt)?;
         }
 
         Ok(res)
     }
 
-    fn evaluate_sexpr(&mut self, sexpr: &ASTNode) -> InterpreterResult<InterpreterValue> {
-        let val = match sexpr {
+    fn evaluate_stmt(&mut self, stmts: &ASTNode) -> InterpreterResult<InterpreterValue> {
+        let val = match stmts {
             ASTNode::Atom(a) => match a {
                 crate::parser::Atom::Number(n) => InterpreterValue::Number(*n),
-                crate::parser::Atom::Identifier(id) => self.env.get(id)?,
+                crate::parser::Atom::Identifier(id) => self.env.retrieve(id)?,
                 crate::parser::Atom::Str(s) => InterpreterValue::Str(s.clone()),
                 crate::parser::Atom::Nil => InterpreterValue::Nothing,
                 crate::parser::Atom::Boolean(b) => InterpreterValue::Bool(*b),
@@ -95,25 +95,25 @@ impl Interpreter {
     fn compute_operand(
         &mut self,
         op: &TokenKind,
-        sexprs: &[ASTNode],
+        stmts: &[ASTNode],
     ) -> InterpreterResult<InterpreterValue> {
-        if sexprs.len() == 1 {
+        if stmts.len() == 1 {
             return match op {
                 TokenKind::Minus => {
-                    let n = self.operation_with_one_number(sexprs)?;
+                    let n = self.operation_with_one_number(stmts)?;
                     Ok(InterpreterValue::Number(-n))
                 }
                 TokenKind::Bang => {
-                    let b = self.operation_with_one_bool(sexprs)?;
+                    let b = self.operation_with_one_bool(stmts)?;
                     Ok(InterpreterValue::Bool(!b))
                 }
                 TokenKind::Print => {
-                    let s = self.stringify(sexprs)?;
+                    let s = self.stringify(stmts)?;
                     println!("{s}");
                     Ok(InterpreterValue::Nothing)
                 }
                 TokenKind::Semicolon => {
-                    self.operation_with_one_operand(sexprs)?;
+                    self.operation_with_one_operand(stmts)?;
                     // statements end in semicolon, so they do not produce a value
                     Ok(InterpreterValue::Nothing)
                 }
@@ -121,65 +121,74 @@ impl Interpreter {
             };
         }
 
-        if sexprs.len() == 2 {
+        if stmts.len() == 2 {
             return match op {
                 TokenKind::Minus => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Number(l - r))
                 }
                 TokenKind::Plus => {
                     // addition
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Number(l + r))
                 }
                 TokenKind::PlusPlus => {
                     // addition
-                    let (mut l, r) = self.operation_with_two_strings(sexprs)?;
+                    let (mut l, r) = self.operation_with_two_strings(stmts)?;
                     l.push_str(r.as_str());
                     Ok(InterpreterValue::Str(l))
                 }
                 TokenKind::Slash => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Number(l / r))
                 }
                 TokenKind::Star => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Number(l * r))
                 }
                 TokenKind::Greater => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Bool(l > r))
                 }
                 TokenKind::GreaterEqual => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Bool(l >= r))
                 }
                 TokenKind::Less => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Bool(l < r))
                 }
                 TokenKind::LessEqual => {
-                    let (l, r) = self.operation_with_two_numbers(sexprs)?;
+                    let (l, r) = self.operation_with_two_numbers(stmts)?;
                     Ok(InterpreterValue::Bool(l <= r))
                 }
-                TokenKind::BangEqual => Ok(InterpreterValue::Bool(
-                    !self.are_two_operands_equal(sexprs)?,
-                )),
+                TokenKind::BangEqual => {
+                    Ok(InterpreterValue::Bool(!self.are_two_operands_equal(stmts)?))
+                }
                 TokenKind::EqualEqual => {
-                    Ok(InterpreterValue::Bool(self.are_two_operands_equal(sexprs)?))
+                    Ok(InterpreterValue::Bool(self.are_two_operands_equal(stmts)?))
                 }
                 TokenKind::Equal => {
-                    assert_eq!(sexprs.len(), 2);
+                    assert_eq!(stmts.len(), 2);
                     // check identifier
-                    let ASTNode::Atom(Atom::Identifier(identifier)) = &sexprs[0] else {
+                    let ASTNode::Atom(Atom::Identifier(identifier)) = &stmts[0] else {
                         return Err(InterpreterError::Generic(
                             "Left operand is not an Identifier".to_string(),
                         ));
                     };
-                    let value = self.evaluate_sexpr(&sexprs[1])?;
-                    self.env.define(identifier.clone(), value);
+                    let value = self.evaluate_stmt(&stmts[1])?;
+                    self.env.assign(identifier.clone(), value.clone());
 
-                    Ok(InterpreterValue::Nothing)
+                    Ok(value)
+                }
+                TokenKind::LeftBrace => {
+                    // we are inside a code block
+                    let mut value = InterpreterValue::Nothing;
+                    for stmt in stmts {
+                        value = self.evaluate_stmt(stmt)?;
+                    }
+
+                    Ok(value)
                 }
                 _ => panic!("Operation '{op}' not implemented!"),
             };
@@ -191,7 +200,7 @@ impl Interpreter {
     // --- STATEMENTS ---
     fn operation_with_one_operand(&mut self, sexprs: &[ASTNode]) -> Result<(), InterpreterError> {
         assert_eq!(sexprs.len(), 1);
-        let _ = self.evaluate_sexpr(&sexprs[0])?;
+        let _ = self.evaluate_stmt(&sexprs[0])?;
         Ok(())
     }
     // --- STATEMENTS ---
@@ -199,7 +208,7 @@ impl Interpreter {
     // --- NUMBERS ---
     fn operation_with_one_number(&mut self, sexprs: &[ASTNode]) -> Result<f64, InterpreterError> {
         assert_eq!(sexprs.len(), 1);
-        let n = self.evaluate_sexpr(&sexprs[0])?;
+        let n = self.evaluate_stmt(&sexprs[0])?;
         let n = self.check_number(n)?;
         Ok(n)
     }
@@ -209,8 +218,8 @@ impl Interpreter {
         sexprs: &[ASTNode],
     ) -> Result<(f64, f64), InterpreterError> {
         assert_eq!(sexprs.len(), 2);
-        let l = self.evaluate_sexpr(&sexprs[0])?;
-        let r = self.evaluate_sexpr(&sexprs[1])?;
+        let l = self.evaluate_stmt(&sexprs[0])?;
+        let r = self.evaluate_stmt(&sexprs[1])?;
         let (l, r) = self.check_two_numbers(l, r)?;
         Ok((l, r))
     }
@@ -248,7 +257,7 @@ impl Interpreter {
     // --- STRINGS ---
     fn stringify(&mut self, sexprs: &[ASTNode]) -> Result<String, InterpreterError> {
         assert_eq!(sexprs.len(), 1);
-        let s = self.evaluate_sexpr(&sexprs[0])?;
+        let s = self.evaluate_stmt(&sexprs[0])?;
         Ok(s.to_string())
     }
 
@@ -257,8 +266,8 @@ impl Interpreter {
         sexprs: &[ASTNode],
     ) -> Result<(String, String), InterpreterError> {
         assert_eq!(sexprs.len(), 2);
-        let l = self.evaluate_sexpr(&sexprs[0])?;
-        let r = self.evaluate_sexpr(&sexprs[1])?;
+        let l = self.evaluate_stmt(&sexprs[0])?;
+        let r = self.evaluate_stmt(&sexprs[1])?;
         let (l, r) = self.check_two_strings(l, r)?;
         Ok((l, r))
     }
@@ -296,15 +305,15 @@ impl Interpreter {
 
     fn operation_with_one_bool(&mut self, sexprs: &[ASTNode]) -> Result<bool, InterpreterError> {
         assert_eq!(sexprs.len(), 1);
-        let b = self.evaluate_sexpr(&sexprs[0])?;
+        let b = self.evaluate_stmt(&sexprs[0])?;
         let b = self.check_bool(b)?;
         Ok(b)
     }
 
     fn are_two_operands_equal(&mut self, sexprs: &[ASTNode]) -> Result<bool, InterpreterError> {
         assert_eq!(sexprs.len(), 2);
-        let l = self.evaluate_sexpr(&sexprs[0])?;
-        let r = self.evaluate_sexpr(&sexprs[1])?;
+        let l = self.evaluate_stmt(&sexprs[0])?;
+        let r = self.evaluate_stmt(&sexprs[1])?;
 
         Ok(match (l, r) {
             (InterpreterValue::Nothing, InterpreterValue::Nothing) => true,

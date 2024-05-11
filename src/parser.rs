@@ -16,13 +16,20 @@ impl Parser {
         tokens.reverse();
         let mut parser = Parser { tokens, current: 0 };
 
-        parser.statements()
+        parser.statements(None)
     }
 
-    fn statements(&mut self) -> Vec<ASTNode> {
+    fn statements(&mut self, stop_token_opt: Option<TokenKind>) -> Vec<ASTNode> {
         let mut stmts = Vec::new();
         loop {
             let stmt = match self.peek().kind {
+                stop if let Some(stop_token) = &stop_token_opt
+                    && stop.eq(stop_token) =>
+                {
+                    self.next();
+                    return stmts;
+                }
+
                 EOF => return stmts,
                 Print => {
                     self.next();
@@ -76,11 +83,8 @@ impl Parser {
         loop {
             let right_token = self.peek();
             let operand = match right_token.kind {
-                Semicolon => {
+                EOF | Semicolon => {
                     break;
-                }
-                EOF => {
-                    return ASTNode::Atom(Atom::Nil);
                 }
                 op => op,
             };
@@ -191,7 +195,10 @@ impl Parser {
             Print => todo!(),
             Ampersand => todo!(),
             RightParenthesis => todo!(),
-            LeftBrace => todo!(),
+            LeftBrace => {
+                let content = self.statements(Some(RightBrace));
+                ASTNode::Cons(token.kind, content)
+            }
             RightBrace => todo!(),
             LeftBracket => todo!(),
             RightBracket => todo!(),
@@ -279,7 +286,7 @@ mod tests {
 
         let s = Parser::parse("1");
         assert_eq!(s.len(), 1);
-        assert_eq!(s[0].to_string(), "");
+        assert_eq!(s[0].to_string(), "1");
 
         let s = Parser::parse("1 + 2 * 3;");
         assert_eq!(s.len(), 1);
@@ -351,5 +358,9 @@ mod tests {
         let s = Parser::parse("11 =-1*4+2;");
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].to_string(), "(; (= 11 (+ (* (- 1) 4) 2)))");
+
+        let s = Parser::parse("{x=1;print x;}");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].to_string(), "({ (; (= x 1)) (; (print x)))");
     }
 }
