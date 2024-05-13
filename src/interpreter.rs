@@ -67,6 +67,7 @@ impl Interpreter {
 
     pub fn interpret(&mut self, source: &str) -> InterpreterResult<InterpreterValue> {
         let stmts = Parser::parse(source);
+        // stmts.iter().for_each(|s| println!("{s}"));
 
         let mut res = InterpreterValue::Nothing;
 
@@ -86,7 +87,7 @@ impl Interpreter {
                 crate::parser::Atom::Nil => InterpreterValue::Nothing,
                 crate::parser::Atom::Boolean(b) => InterpreterValue::Bool(*b),
             },
-            ASTNode::Cons(op, sexprs) => self.compute_operand(op, sexprs)?,
+            ASTNode::Cons(op, stmts) => self.compute_operand(op, stmts)?,
         };
 
         Ok(val)
@@ -97,6 +98,47 @@ impl Interpreter {
         op: &TokenKind,
         stmts: &[ASTNode],
     ) -> InterpreterResult<InterpreterValue> {
+        match op {
+            TokenKind::LeftBrace => {
+                // we are inside a code block
+                let inner_env = Environment::new(Some(&self.env));
+                let mut inner_intrp = Interpreter { env: inner_env };
+                let mut value = InterpreterValue::Nothing;
+                for stmt in stmts {
+                    value = inner_intrp.evaluate_stmt(stmt)?;
+                }
+
+                return Ok(value);
+            }
+            TokenKind::If => {
+                // check condition
+                let condition = self.evaluate_stmt(&stmts[0])?;
+                if self.check_bool(condition)? {
+                    return self.evaluate_stmt(&stmts[1]);
+                } else if stmts.len() == 3 {
+                    return self.evaluate_stmt(&stmts[2]);
+                } else {
+                    return Ok(InterpreterValue::Nothing);
+                };
+            }
+            TokenKind::While => {
+                // check condition
+                while let condition = self.evaluate_stmt(&stmts[0])?
+                    && self.check_bool(condition)?
+                {
+                    for (i, stmt) in stmts.iter().enumerate() {
+                        if i == 0 {
+                            continue;
+                        }
+                        let _ = self.evaluate_stmt(stmt)?;
+                    }
+                }
+                return Ok(InterpreterValue::Nothing);
+            }
+            _ => (),
+        };
+
+        // TODO: check stmts len after matching?
         if stmts.len() == 1 {
             return match op {
                 TokenKind::Minus => {
@@ -113,10 +155,11 @@ impl Interpreter {
                     Ok(InterpreterValue::Nothing)
                 }
                 TokenKind::Semicolon => {
-                    self.operation_with_one_operand(stmts)?;
+                    let _ = self.operation_with_one_operand(stmts)?;
                     // statements end in semicolon, so they do not produce a value
                     Ok(InterpreterValue::Nothing)
                 }
+                TokenKind::Else => self.operation_with_one_operand(stmts),
                 _ => panic!("Operation '{op}' not implemented!"),
             };
         }
@@ -169,7 +212,6 @@ impl Interpreter {
                     Ok(InterpreterValue::Bool(self.are_two_operands_equal(stmts)?))
                 }
                 TokenKind::Equal => {
-                    assert_eq!(stmts.len(), 2);
                     // check identifier
                     let ASTNode::Atom(Atom::Identifier(identifier)) = &stmts[0] else {
                         return Err(InterpreterError::Generic(
@@ -181,45 +223,59 @@ impl Interpreter {
 
                     Ok(value)
                 }
-                TokenKind::LeftBrace => {
-                    // we are inside a code block
-                    let mut value = InterpreterValue::Nothing;
-                    for stmt in stmts {
-                        value = self.evaluate_stmt(stmt)?;
+                TokenKind::And => {
+                    let l = self.evaluate_stmt(&stmts[0])?;
+                    if self.check_bool(l)? {
+                        let r = self.evaluate_stmt(&stmts[1])?;
+                        let r = self.check_bool(r)?;
+                        Ok(InterpreterValue::Bool(r))
+                    } else {
+                        Ok(InterpreterValue::Bool(false))
                     }
-
-                    Ok(value)
+                }
+                TokenKind::Or => {
+                    let l = self.evaluate_stmt(&stmts[0])?;
+                    if !self.check_bool(l)? {
+                        let r = self.evaluate_stmt(&stmts[1])?;
+                        let r = self.check_bool(r)?;
+                        Ok(InterpreterValue::Bool(r))
+                    } else {
+                        Ok(InterpreterValue::Bool(true))
+                    }
                 }
                 _ => panic!("Operation '{op}' not implemented!"),
             };
         }
 
-        Ok(InterpreterValue::Nothing)
+        panic!("Operation '{op}' not implemented!");
     }
 
     // --- STATEMENTS ---
-    fn operation_with_one_operand(&mut self, sexprs: &[ASTNode]) -> Result<(), InterpreterError> {
-        assert_eq!(sexprs.len(), 1);
-        let _ = self.evaluate_stmt(&sexprs[0])?;
-        Ok(())
+    fn operation_with_one_operand(
+        &mut self,
+        stmts: &[ASTNode],
+    ) -> Result<InterpreterValue, InterpreterError> {
+        assert_eq!(stmts.len(), 1);
+        let value = self.evaluate_stmt(&stmts[0])?;
+        Ok(value)
     }
     // --- STATEMENTS ---
 
     // --- NUMBERS ---
-    fn operation_with_one_number(&mut self, sexprs: &[ASTNode]) -> Result<f64, InterpreterError> {
-        assert_eq!(sexprs.len(), 1);
-        let n = self.evaluate_stmt(&sexprs[0])?;
+    fn operation_with_one_number(&mut self, stmts: &[ASTNode]) -> Result<f64, InterpreterError> {
+        assert_eq!(stmts.len(), 1);
+        let n = self.evaluate_stmt(&stmts[0])?;
         let n = self.check_number(n)?;
         Ok(n)
     }
 
     fn operation_with_two_numbers(
         &mut self,
-        sexprs: &[ASTNode],
+        stmts: &[ASTNode],
     ) -> Result<(f64, f64), InterpreterError> {
-        assert_eq!(sexprs.len(), 2);
-        let l = self.evaluate_stmt(&sexprs[0])?;
-        let r = self.evaluate_stmt(&sexprs[1])?;
+        assert_eq!(stmts.len(), 2);
+        let l = self.evaluate_stmt(&stmts[0])?;
+        let r = self.evaluate_stmt(&stmts[1])?;
         let (l, r) = self.check_two_numbers(l, r)?;
         Ok((l, r))
     }
@@ -255,19 +311,19 @@ impl Interpreter {
     // --- NUMBERS ---
 
     // --- STRINGS ---
-    fn stringify(&mut self, sexprs: &[ASTNode]) -> Result<String, InterpreterError> {
-        assert_eq!(sexprs.len(), 1);
-        let s = self.evaluate_stmt(&sexprs[0])?;
+    fn stringify(&mut self, stmts: &[ASTNode]) -> Result<String, InterpreterError> {
+        assert_eq!(stmts.len(), 1);
+        let s = self.evaluate_stmt(&stmts[0])?;
         Ok(s.to_string())
     }
 
     fn operation_with_two_strings(
         &mut self,
-        sexprs: &[ASTNode],
+        stmts: &[ASTNode],
     ) -> Result<(String, String), InterpreterError> {
-        assert_eq!(sexprs.len(), 2);
-        let l = self.evaluate_stmt(&sexprs[0])?;
-        let r = self.evaluate_stmt(&sexprs[1])?;
+        assert_eq!(stmts.len(), 2);
+        let l = self.evaluate_stmt(&stmts[0])?;
+        let r = self.evaluate_stmt(&stmts[1])?;
         let (l, r) = self.check_two_strings(l, r)?;
         Ok((l, r))
     }
@@ -303,17 +359,17 @@ impl Interpreter {
         Ok(b)
     }
 
-    fn operation_with_one_bool(&mut self, sexprs: &[ASTNode]) -> Result<bool, InterpreterError> {
-        assert_eq!(sexprs.len(), 1);
-        let b = self.evaluate_stmt(&sexprs[0])?;
+    fn operation_with_one_bool(&mut self, stmts: &[ASTNode]) -> Result<bool, InterpreterError> {
+        assert_eq!(stmts.len(), 1);
+        let b = self.evaluate_stmt(&stmts[0])?;
         let b = self.check_bool(b)?;
         Ok(b)
     }
 
-    fn are_two_operands_equal(&mut self, sexprs: &[ASTNode]) -> Result<bool, InterpreterError> {
-        assert_eq!(sexprs.len(), 2);
-        let l = self.evaluate_stmt(&sexprs[0])?;
-        let r = self.evaluate_stmt(&sexprs[1])?;
+    fn are_two_operands_equal(&mut self, stmts: &[ASTNode]) -> Result<bool, InterpreterError> {
+        assert_eq!(stmts.len(), 2);
+        let l = self.evaluate_stmt(&stmts[0])?;
+        let r = self.evaluate_stmt(&stmts[1])?;
 
         Ok(match (l, r) {
             (InterpreterValue::Nothing, InterpreterValue::Nothing) => true,
@@ -366,25 +422,50 @@ mod tests {
     use super::InterpreterResult;
     use crate::interpreter::Interpreter;
 
-    // #[test]
+    #[test]
     fn literal_evaluations() -> InterpreterResult<()> {
-        let i = Interpreter::new().interpret("1 + 2 * 3 / 1.0 + (3 * (--1-1));")?;
+        let i = Interpreter::new().interpret("1 + 2 * 3 / 1.0 + (3 * (--1-1))")?;
         assert_eq!(i.to_string(), "7");
 
-        let i = Interpreter::new().interpret(r#""a"++"b";"#)?;
+        let i = Interpreter::new().interpret(r#""a"++"b""#)?;
         assert_eq!(i.to_string(), r#""ab""#);
 
-        let i = Interpreter::new().interpret("!(4 >= 5 * 3);")?;
+        let i = Interpreter::new().interpret("!(4 >= 5 * 3)")?;
         assert_eq!(i.to_string(), "true");
 
-        let i = Interpreter::new().interpret("!!(4 == 5 * 3);")?;
+        let i = Interpreter::new().interpret("!!(4 == 5 * 3)")?;
         assert_eq!(i.to_string(), "false");
 
         let i = Interpreter::new().interpret(r#"2 * (3 / -"muffin");"#);
         assert!(i.is_err());
 
         let i = Interpreter::new().interpret(r#"print "muffin";"#)?;
-        assert_eq!(i.to_string(), "muffin");
+        assert_eq!(i.to_string(), "");
+
+        let i = Interpreter::new().interpret(
+            r#"
+            a = "global a";
+            b = "global b";
+            c = "global c";
+            {
+              a = "outer a";
+              b = "outer b";
+              {
+                a = "inner a";
+                print a;
+                print b;
+                print c;
+              }
+              print a;
+              print b;
+              print c;
+            }
+            print a;
+            print b;
+            print c;
+            "#,
+        )?;
+        assert_eq!(i.to_string(), "");
 
         Ok(())
     }

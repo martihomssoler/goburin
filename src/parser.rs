@@ -62,6 +62,45 @@ impl Parser {
 
                     continue;
                 }
+                // Control Flow
+                If => {
+                    self.next();
+                    self.consume(LeftParenthesis);
+                    let condition = self.expression_binding_power(0);
+                    self.consume(RightParenthesis);
+                    let if_branch = if self.peek().kind == LeftBrace {
+                        self.next();
+                        self.statements(Some(RightBrace))
+                    } else {
+                        self.statements(None)
+                    };
+
+                    let mut body = vec![condition, ASTNode::Cons(LeftBrace, if_branch)];
+                    // let's check if there is an "else" clause
+                    if self.peek().kind == Else {
+                        self.next();
+                        body.push(ASTNode::Cons(Else, self.statements(None)));
+                    }
+
+                    ASTNode::Cons(If, body)
+                }
+                While => {
+                    self.next();
+                    self.consume(LeftParenthesis);
+                    let condition = self.expression_binding_power(0);
+                    self.consume(RightParenthesis);
+                    let mut while_body = if self.peek().kind == LeftBrace {
+                        self.next();
+                        self.statements(Some(RightBrace))
+                    } else {
+                        self.statements(None)
+                    };
+                    let mut condition_and_body = vec![condition];
+                    condition_and_body.append(&mut while_body);
+
+                    ASTNode::Cons(While, condition_and_body)
+                }
+                // Others
                 _ => {
                     let expr = self.expression_binding_power(0);
                     if let TokenKind::Semicolon = self.peek().kind {
@@ -73,6 +112,15 @@ impl Parser {
                 }
             };
             stmts.push(stmt);
+        }
+    }
+
+    fn consume(&mut self, expected: TokenKind) {
+        let actual = self.peek().kind;
+        if actual == expected {
+            self.next();
+        } else {
+            panic!("Expected '{expected}' but got '{actual}'");
         }
     }
 
@@ -137,7 +185,7 @@ impl Parser {
     // TODO: make a single function for the binding powers
     fn postfix_binding_power(op: &TokenKind) -> Option<(u8, ())> {
         let res = match op {
-            LeftBracket => (11, ()),
+            LeftBracket => (15, ()),
             _ => return None,
         };
         Some(res)
@@ -145,8 +193,8 @@ impl Parser {
 
     fn prefix_binding_power(op: &TokenKind) -> ((), u8) {
         match op {
-            Bang => ((), 11),
-            Plus | Minus => ((), 9),
+            Bang => ((), 15),
+            Plus | Minus => ((), 13),
             _ => panic!("bad prefix op: {op:?}"),
         }
     }
@@ -155,10 +203,12 @@ impl Parser {
         // as a general rule we use and odd number for the bare priority and bump it up by one for associativity
         let res = match op {
             Equal => (2, 1),
-            BangEqual | EqualEqual | Greater | GreaterEqual | Less | LessEqual | Question => (4, 3),
-            Plus | PlusPlus | Minus => (5, 6),
-            Star | Slash => (7, 8),
-            Dot => (14, 13),
+            Or => (4, 3),
+            And => (6, 5),
+            BangEqual | EqualEqual | Greater | GreaterEqual | Less | LessEqual | Question => (8, 7),
+            Plus | PlusPlus | Minus => (9, 10),
+            Star | Slash => (11, 12),
+            Dot => (18, 17),
             _ => return None,
         };
         Some(res)
@@ -362,5 +412,21 @@ mod tests {
         let s = Parser::parse("{x=1;print x;}");
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].to_string(), "({ (; (= x 1)) (; (print x)))");
+
+        let s = Parser::parse(
+            r#"
+                a = 1;
+                while (a < 2) {
+                  print a;
+                  a = a + 1;
+                } 
+            "#,
+        );
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].to_string(), "(; (= a 1))");
+        assert_eq!(
+            s[1].to_string(),
+            "(while (< a 2) (; (print a)) (; (= a (+ a 1))))"
+        );
     }
 }

@@ -3,7 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use crate::interpreter::{InterpreterError, InterpreterResult, InterpreterValue};
 
 pub struct Environment {
-    parent_env: Option<Rc<Environment>>,
+    parent_env: Option<*const Environment>,
     variables: HashMap<String, InterpreterValue>,
 }
 
@@ -26,13 +26,13 @@ impl Environment {
         Ok(value)
     }
 
-    pub fn parent_env(&self) -> Option<&Rc<Environment>> {
-        self.parent_env.as_ref()
+    pub fn parent_env(&self) -> Option<&Environment> {
+        unsafe { self.parent_env.map(|ptr| &*ptr) }
     }
 
-    pub fn new(parent_env: Option<Rc<Environment>>) -> Self {
+    pub fn new(parent_env: Option<&Environment>) -> Self {
         Self {
-            parent_env,
+            parent_env: parent_env.map(|r| r as *const _),
             variables: HashMap::new(),
         }
     }

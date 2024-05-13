@@ -61,7 +61,10 @@ impl<'a> Tokenizer<'a> {
         };
 
         match c {
-            // | '\t' | '\r'
+            '\t' => {
+                // self.current_pos += 3;
+            }
+            '\r' => {}
             ' ' => {}
             '\n' => {
                 self.column = 1;
@@ -101,10 +104,12 @@ impl<'a> Tokenizer<'a> {
                 if let Some(c) = self.peek()
                     && '/'.eq(c)
                 {
+                    self.next();
                     self.skip_single_line_comment();
                 } else if let Some(c) = self.peek()
                     && '*'.eq(c)
                 {
+                    self.next();
                     self.skip_multi_line_comment();
                 } else {
                     self.add_token(TokenKind::Slash)
@@ -152,16 +157,11 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn skip_single_line_comment(&mut self) {
-        while let Some(c) = self.peek()
+        while let Some(c) = self.next()
             && !c.eq(&'\n')
-        {
-            self.current_pos += 1;
-            self.next();
-        }
-        self.current_pos += 1;
+        {}
         self.column = 1;
         self.line += 1;
-        self.next();
     }
 
     fn skip_multi_line_comment(&mut self) {
@@ -556,7 +556,7 @@ mod tests {
             //   single line comments
             /*  multi-line comments with /* nesting */ */
         ";
-        let expected_tokens = [Token::new(EOF, 215, 215, 5)].to_vec();
+        let expected_tokens = [Token::new(EOF, 174, 174, 5)].to_vec();
 
         let actual_tokens = Tokenizer::tokenize(source)?;
 
