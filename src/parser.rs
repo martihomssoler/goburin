@@ -62,6 +62,12 @@ impl Parser {
 
                     continue;
                 }
+                Var => {
+                    self.next();
+                    let value = self.expression_binding_power(0);
+                    assert!(matches!(value, ASTNode::Cons(Equal, _)));
+                    ASTNode::Cons(Var, vec![value])
+                }
                 // Control Flow
                 If => {
                     self.next();
@@ -272,6 +278,7 @@ impl Parser {
             Return => todo!(),
             While => todo!(),
             EOF => todo!(),
+            Var => todo!(),
         }
     }
 

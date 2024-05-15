@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display};
+use std::{cell::RefCell, error::Error, fmt::Display, rc::Rc};
 
 use crate::{
     environment::Environment,
@@ -55,13 +55,13 @@ fn run(interpreter: &mut Interpreter, source: &str) -> Result<(), Box<dyn Error>
 }
 
 pub struct Interpreter {
-    env: Environment,
+    env: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Self {
-            env: Environment::new(None),
+            env: Rc::new(RefCell::new(Environment::new(None))),
         }
     }
 
@@ -82,7 +82,7 @@ impl Interpreter {
         let val = match stmts {
             ASTNode::Atom(a) => match a {
                 crate::parser::Atom::Number(n) => InterpreterValue::Number(*n),
-                crate::parser::Atom::Identifier(id) => self.env.retrieve(id)?,
+                crate::parser::Atom::Identifier(id) => self.env.as_ref().borrow().get(id)?,
                 crate::parser::Atom::Str(s) => InterpreterValue::Str(s.clone()),
                 crate::parser::Atom::Nil => InterpreterValue::Nothing,
                 crate::parser::Atom::Boolean(b) => InterpreterValue::Bool(*b),
@@ -101,7 +101,7 @@ impl Interpreter {
         match op {
             TokenKind::LeftBrace => {
                 // we are inside a code block
-                let inner_env = Environment::new(Some(&self.env));
+                let inner_env = Rc::new(RefCell::new(Environment::new(Some(self.env.clone()))));
                 let mut inner_intrp = Interpreter { env: inner_env };
                 let mut value = InterpreterValue::Nothing;
                 for stmt in stmts {
@@ -160,6 +160,25 @@ impl Interpreter {
                     Ok(InterpreterValue::Nothing)
                 }
                 TokenKind::Else => self.operation_with_one_operand(stmts),
+                TokenKind::Var => {
+                    let ASTNode::Cons(_, stmts) = &stmts[0] else {
+                        return Err(InterpreterError::Generic(
+                            "Wrong use of var keyword".to_string(),
+                        ));
+                    };
+                    let ASTNode::Atom(Atom::Identifier(identifier)) = &stmts[0] else {
+                        return Err(InterpreterError::Generic(
+                            "Left operand is not an Identifier".to_string(),
+                        ));
+                    };
+                    let value = self.evaluate_stmt(&stmts[1])?;
+                    self.env
+                        .as_ref()
+                        .borrow_mut()
+                        .define(identifier.clone(), value.clone());
+
+                    Ok(value)
+                }
                 _ => panic!("Operation '{op}' not implemented!"),
             };
         }
@@ -219,7 +238,10 @@ impl Interpreter {
                         ));
                     };
                     let value = self.evaluate_stmt(&stmts[1])?;
-                    self.env.assign(identifier.clone(), value.clone());
+                    self.env
+                        .as_ref()
+                        .borrow_mut()
+                        .set(identifier.clone(), value.clone());
 
                     Ok(value)
                 }
@@ -398,7 +420,7 @@ impl Display for InterpreterValue {
             InterpreterValue::Nothing => write!(f, ""),
             InterpreterValue::Bool(b) => write!(f, "{}", b),
             InterpreterValue::Number(n) => write!(f, "{}", n),
-            InterpreterValue::Str(s) => write!(f, "{:?}", s),
+            InterpreterValue::Str(s) => write!(f, "{}", s),
             InterpreterValue::Identifier(id) => write!(f, "{:?}", id),
         }
     }

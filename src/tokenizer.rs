@@ -403,6 +403,7 @@ pub enum TokenKind {
     Str(String),
     Number(f64),
     // keywords
+    Var,
     And,
     Else,
     False,
@@ -425,6 +426,7 @@ pub fn get_keyword(identifier: &str) -> Option<TokenKind> {
         "fn" => Some(TokenKind::Fn),
         "if" => Some(TokenKind::If),
         "or" => Some(TokenKind::Or),
+        "var" => Some(TokenKind::Var),
         "and" => Some(TokenKind::And),
         "else" => Some(TokenKind::Else),
         "for" => Some(TokenKind::For),
@@ -469,6 +471,7 @@ impl Display for TokenKind {
             TokenKind::Identifier(id) => f.write_fmt(format_args!("{id}")),
             TokenKind::Str(s) => f.write_fmt(format_args!("{s}")),
             TokenKind::Number(n) => f.write_fmt(format_args!("{n}")),
+            TokenKind::Var => f.write_str("var"),
             TokenKind::And => f.write_str("and"),
             TokenKind::Else => f.write_str("else"),
             TokenKind::False => f.write_str("false"),

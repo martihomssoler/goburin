@@ -278,3 +278,7 @@ binary       -> expression operator expression ;
 operator     -> "==" | "!=" | "<" | "<=" | ">" | ">=" 
 							| "+" | "-" | "*" | "/" ;
 ```
+# Others 
+
+## Interesting resources / topics
+https://stackoverflow.com/questions/75680491/what-is-the-trade-off-between-lazy-and-strict-eager-evaluation
