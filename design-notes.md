@@ -6,6 +6,9 @@ Kansuu -> function (mathematics / programming)
 - Koka
 - JAI
 - Rust
+- Zig (generics and allocators)
+- Go
+- OCaml
 (https://www.youtube.com/watch?v=oa0qq75i9oc)
 (https://craftinginterpreters.com/the-lox-language.html)
 (https://github.com/BSVino/JaiPrimer/blob/master/JaiPrimer.md)
@@ -282,3 +285,19 @@ operator     -> "==" | "!=" | "<" | "<=" | ">" | ">="
 
 ## Interesting resources / topics
 https://stackoverflow.com/questions/75680491/what-is-the-trade-off-between-lazy-and-strict-eager-evaluation
+
+https://cs.wellesley.edu/~cs301/s21/
+
+https://cs.wellesley.edu/~cs301/s21/project/tiny
+
+https://cs.wellesley.edu/~cs301/s21/topics/
+
+https://github.com/jamiebuilds/the-super-tiny-compiler
+
+https://a7medayman6.github.io/Tiny-Compiler/
+
+https://build-your-own.org/blog/20230507_byoc_new/
+
+https://github.com/byo-books/pretty_laughable_lang/
+
+https://leanpub.com/from_source_code_to_machine_code/

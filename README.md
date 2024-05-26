@@ -1,7 +1,26 @@
 # GOBURIN
 My personal hobby "goblin" programming language. Meant to be simple and moddable.
 
+Overall structure:
+
+[SOURCE] -> [TOKENIZER] -> [PARSER] -> [IR GENERATOR] -> [NANOPASS]* -> [TARGET GENERATOR]
+       string         tokens       ast                il             il
+
 # TODO
+- [ ] Self-hosted
+  - [ ] Add support for: 
+      - [ ] string literals
+      - [ ] system calls (to read, write and so on)
+      - [ ] reading command line arguments (to get the path of the file to parse) 
+  - [ ] Implement the compiler in Goburin
+
+## Links
+Linux Syscall Table -> (https://filippo.io/linux-syscall-table/)
+(https://www.youtube.com/watch?v=8QP2fDBIxjM&list=PLpM-Dvs8t0VbMZA7wW9aR3EtBqe2kinu4)
+(https://norasandler.com/2017/11/29/Write-a-Compiler.html)
+(http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf)
+
+## FUTURE
 - [ ] Frontend
   - [ ] Lexer (takes source string and returns array of tokens)
   - [ ] Parser (takes array of tokens and produces an AbstractSyntaxTree)

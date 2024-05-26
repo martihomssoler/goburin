@@ -1,0 +1,18 @@
+// three address code
+// _t0 is used for empty values
+// 
+// _t1 := 34
+// _t2 := 35
+// _t3 := 1
+// _t4 := sub 0 _t3
+// _t5 := 2
+// _t6 := add _t4 _t5
+// _t7 := sub 0 _t6
+// _t8 := mul _t2 _t7
+// _t9 := add _t1 _t8
+// _t0 := syscall 60 _t9
+//
+return 34 + (35 * (-1+2) / 1);
+// return 34 + 35;
+// return 35 * (2-1);
+
