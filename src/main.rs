@@ -256,7 +256,11 @@ pub mod backend {
                     } else {
                         get_register(left)
                     };
-                    let right = get_register(right);
+                    let right = if let Variable::Value(Value::Constant(n)) = right {
+                        n.to_string()
+                    } else {
+                        get_register(right)
+                    };
 
                     writeln!(asm, "    ;; -- {left} - {right}");
                     writeln!(asm, "    mov {res}, {left}");
@@ -264,8 +268,16 @@ pub mod backend {
                 }
                 Op::Plus { res, left, right } => {
                     let res = get_register(res);
-                    let left = get_register(left);
-                    let right = get_register(right);
+                    let left = if let Variable::Value(Value::Constant(n)) = left {
+                        n.to_string()
+                    } else {
+                        get_register(left)
+                    };
+                    let right = if let Variable::Value(Value::Constant(n)) = right {
+                        n.to_string()
+                    } else {
+                        get_register(right)
+                    };
 
                     writeln!(asm, "    ;; -- {left} + {right}");
                     writeln!(asm, "    mov {res}, {left}");
@@ -273,8 +285,16 @@ pub mod backend {
                 }
                 Op::Star { res, left, right } => {
                     let res = get_register(res);
-                    let left = get_register(left);
-                    let right = get_register(right);
+                    let left = if let Variable::Value(Value::Constant(n)) = left {
+                        n.to_string()
+                    } else {
+                        get_register(left)
+                    };
+                    let right = if let Variable::Value(Value::Constant(n)) = right {
+                        n.to_string()
+                    } else {
+                        get_register(right)
+                    };
 
                     writeln!(asm, "    ;; -- {left} * {right}");
                     writeln!(asm, "    xor rdx, rdx");
@@ -284,13 +304,22 @@ pub mod backend {
                 }
                 Op::Slash { res, left, right } => {
                     let res = get_register(res);
-                    let left = get_register(left);
-                    let right = get_register(right);
+                    let left = if let Variable::Value(Value::Constant(n)) = left {
+                        n.to_string()
+                    } else {
+                        get_register(left)
+                    };
+                    let right = if let Variable::Value(Value::Constant(n)) = right {
+                        n.to_string()
+                    } else {
+                        get_register(right)
+                    };
 
                     writeln!(asm, "    ;; -- {left} / {right}");
                     writeln!(asm, "    xor rdx, rdx");
                     writeln!(asm, "    mov rax, {left}");
-                    writeln!(asm, "    idiv {right}");
+                    writeln!(asm, "    mov rbx, {right}");
+                    writeln!(asm, "    idiv rbx");
                     writeln!(asm, "    mov {res}, rax");
                 }
                 Op::Syscall { num, var } => {
@@ -359,7 +388,59 @@ pub mod middleend {
         Ok(ir)
     }
 
-    fn reduce_ops(ops: &mut IR) {}
+    #[allow(irrefutable_let_patterns)]
+    fn reduce_ops(ir: &mut IR) {
+        // constant folding?
+        let ops_count = ir.ops.len();
+        for op_idx in 0..ops_count {
+            let op = ir.ops[op_idx].clone();
+            let mut reduced = false;
+            match op {
+                Op::Assignment { res, val }
+                    if let Variable::Temporary(t) = res
+                        && let Value::Constant(c) = val =>
+                {
+                    // found an assignment w/ a constant
+                    for other_op_idx in op_idx..ops_count {
+                        match &mut ir.ops[other_op_idx] {
+                            Op::Minus { left, right, .. }
+                            | Op::Plus { left, right, .. }
+                            | Op::Star { left, right, .. }
+                            | Op::Slash { left, right, .. }
+                                if res.eq(left) || res.eq(right) =>
+                            {
+                                reduced = true;
+                                if res.eq(left) {
+                                    *left = Variable::Value(Value::Constant(c));
+                                } else {
+                                    *right = Variable::Value(Value::Constant(c));
+                                }
+                            }
+                            _ => (),
+                        }
+                    }
+                }
+                _ => (),
+            }
+            if reduced
+                && let Op::Assignment { res, val } = &mut ir.ops[op_idx]
+                && let Variable::Temporary(t) = res
+            {
+                *t = 0;
+            }
+        }
+
+        #[allow(clippy::match_like_matches_macro)]
+        ir.ops.retain(|f| match f {
+            Op::Assignment { res, val }
+                if let Variable::Temporary(t) = res
+                    && *t == 0 =>
+            {
+                false
+            }
+            _ => true,
+        })
+    }
 
     fn stmt_ops(stmt: Stmt, ir: &mut IR) -> CompilerResult<()> {
         match stmt {
@@ -486,14 +567,14 @@ pub mod middleend {
         },
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Variable {
         Temporary(u8),
         Register(String),
         Value(Value),
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum Value {
         Constant(i64),
     }
