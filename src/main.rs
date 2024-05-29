@@ -35,18 +35,18 @@ pub fn compile_file(file_path: &PathBuf) -> CompilerResult<()> {
     // generate IR
     let ir = middleend::generate_ir(ast)?;
     // generate ASM
-    let asm = backend::generate_asm(ir)?;
+    let qbe = backend::generate_qbe(ir)?;
 
-    compile_asm(file_path, asm)?;
+    compile_qbe(file_path, qbe)?;
 
     Ok(())
 }
 
-fn compile_asm(file_path: &Path, asm: String) -> CompilerResult<()> {
-    let output_path = file_path.with_extension("asm");
+fn compile_qbe(file_path: &Path, qbe: String) -> CompilerResult<()> {
+    let output_path = file_path.with_extension("ssa");
     let mut output = File::create(output_path.clone())?;
 
-    output.write_all(asm.as_bytes())?;
+    output.write_all(qbe.as_bytes())?;
 
     let file_dir = output_path.parent().unwrap().to_str().unwrap();
     let basename = output_path
@@ -58,21 +58,25 @@ fn compile_asm(file_path: &Path, asm: String) -> CompilerResult<()> {
         .unwrap()
         .0
         .to_string();
+    let mut qbe_file = basename.clone();
+    qbe_file.push_str(".ssa");
     let mut asm_file = basename.clone();
-    asm_file.push_str(".asm");
-    let mut obj_file = basename.clone();
-    obj_file.push_str(".o");
+    asm_file.push_str(".s");
 
-    Command::new("nasm")
-        .arg("-felf64")
-        .arg(asm_file)
+    // qbe -o file.s file.ssa
+    Command::new("qbe")
+        .arg("-o")
+        .arg(asm_file.clone())
+        .arg(qbe_file)
         .current_dir(file_dir)
         .spawn()?
         .wait()?;
-    Command::new("ld")
+
+    // cc -o file file.s
+    Command::new("cc")
         .arg("-o")
         .arg(basename)
-        .arg(obj_file)
+        .arg(asm_file)
         .current_dir(file_dir)
         .spawn()?
         .wait()?;
@@ -86,7 +90,7 @@ pub enum CompilerError {
     ParserError,
     SemanticError,
     IRError,
-    ASMError,
+    QBEError,
     Generic(String),
 }
 
@@ -103,243 +107,101 @@ impl From<io::Error> for CompilerError {
 }
 
 pub mod backend {
-    use crate::middleend::{Op, Value, Variable};
+    use crate::frontend::parser::Constant;
+    use crate::middleend::{Op, Variable};
     use crate::{middleend::IR, CompilerResult};
     use core::panic;
     use std::fmt::Write;
     use std::path::PathBuf;
 
-    pub struct ASM {}
-    /// Generate x86 assembly, in the future there will be a parameter to define which ASM to generate
-    pub fn generate_asm(ir: IR) -> CompilerResult<String> {
-        let ir = register_allocation(ir);
-        let asm = write_asm(ir);
+    pub struct QBE {}
+    /// Generate x86 assembly, in the future there will be a parameter to define which QBE to generate
+    pub fn generate_qbe(ir: IR) -> CompilerResult<String> {
+        let qbe = write_qbe(ir);
 
-        Ok(asm)
+        Ok(qbe)
     }
 
-    fn register_allocation(mut ir: IR) -> IR {
-        let mut interf_graph = InterferenceGraph::new(1 + ir.temps as usize);
+    fn write_qbe(ir: IR) -> String {
+        let mut qbe = String::new();
 
-        // x86 specific general purpose registers
-        let registers = vec!["r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
-
-        // build interference graph
-        for (op_idx, op) in ir.ops.iter().enumerate() {
-            match op {
-                Op::Assignment { res, val } => {
-                    let res = get_temp(res);
-                    interf_graph.lifetimes[res].push(op_idx);
-                }
-                Op::Minus { res, left, right }
-                | Op::Plus { res, left, right }
-                | Op::Star { res, left, right }
-                | Op::Slash { res, left, right } => {
-                    let res = get_temp(res);
-                    let left = get_temp(left);
-                    let right = get_temp(right);
-
-                    interf_graph.lifetimes[res].push(op_idx);
-                    interf_graph.lifetimes[left].push(op_idx);
-                    interf_graph.lifetimes[right].push(op_idx);
-                }
-                Op::Syscall { var, .. } => {
-                    let var = get_temp(var);
-                    interf_graph.lifetimes[var].push(op_idx);
-                }
-            }
-        }
-
-        // color interference graph
-        interf_graph.allocate_regs(registers);
-
-        // assign registers to the ops
-        for op in &mut ir.ops {
-            match op {
-                Op::Assignment { res, .. } => {
-                    set_register(&interf_graph, res);
-                }
-                Op::Minus { res, left, right }
-                | Op::Plus { res, left, right }
-                | Op::Star { res, left, right }
-                | Op::Slash { res, left, right } => {
-                    set_register(&interf_graph, res);
-                    set_register(&interf_graph, left);
-                    set_register(&interf_graph, right);
-                }
-                Op::Syscall { var, .. } => {
-                    set_register(&interf_graph, var);
-                }
-            }
-        }
-
-        ir
-    }
-
-    fn set_register(interf_graph: &InterferenceGraph, res: &mut Variable) {
-        if let Variable::Temporary(t) = res {
-            let register = interf_graph.regs[*t as usize].clone();
-            *res = Variable::Register(register);
-        }
-    }
-
-    fn get_temp(res: &Variable) -> usize {
-        if let Variable::Temporary(t) = res {
-            *t as usize
-        } else {
-            0
-        }
-    }
-
-    struct InterferenceGraph {
-        lifetimes: Vec<Vec<usize>>,
-        regs: Vec<String>,
-    }
-
-    impl InterferenceGraph {
-        pub fn new(temps: usize) -> Self {
-            Self {
-                lifetimes: vec![Vec::new(); temps],
-                regs: vec![String::new(); temps],
-            }
-        }
-
-        pub fn allocate_regs(&mut self, available_regs: Vec<&str>) {
-            // we skip 0 because _t0 is used for empty values
-            self.regs[1] = available_regs[0].to_string();
-            for i in 1..self.regs.len() {
-                let mut unused_regs = available_regs.clone();
-                // get stast and end of lifetime
-                let Some(i_start) = self.lifetimes[i].first() else {
-                    continue;
-                };
-                let Some(i_end) = self.lifetimes[i].last() else {
-                    continue;
-                };
-                for j in 1..self.regs.len() {
-                    let Some(j_start) = self.lifetimes[j].first() else {
-                        continue;
-                    };
-                    let Some(j_end) = self.lifetimes[j].last() else {
-                        continue;
-                    };
-                    if (i_start <= j_start && j_start <= i_end)
-                        || (j_start <= i_start && i_start <= j_end)
-                    {
-                        unused_regs.retain(|r| !r.eq(&self.regs[j]));
-                    }
-                }
-                self.regs[i] = unused_regs.first().unwrap().to_string();
-            }
-            println!("{:?}", self.regs);
-        }
-    }
-
-    fn write_asm(ir: IR) -> String {
-        let mut asm = String::new();
-
-        writeln!(asm, "global _start");
-        writeln!(asm, "section .text");
-        writeln!(asm, "_start:");
+        writeln!(qbe, r#"export function w $main() {{"#);
+        writeln!(qbe, r#"@start"#);
 
         for op in ir.ops {
             match op {
                 Op::Assignment { res, val } => {
-                    let res = get_register(res);
-                    let Value::Constant(n) = val;
-                    writeln!(asm, "    mov {res}, {n}");
+                    let res = get_variable(res);
+                    let val = get_value(val);
+                    writeln!(qbe, "    {res} =w copy {val}");
                 }
                 Op::Minus { res, left, right } => {
-                    let res = get_register(res);
-                    let left = if let Variable::Value(Value::Constant(n)) = left {
-                        n.to_string()
-                    } else {
-                        get_register(left)
-                    };
-                    let right = if let Variable::Value(Value::Constant(n)) = right {
-                        n.to_string()
-                    } else {
-                        get_register(right)
-                    };
+                    let res = get_variable(res);
+                    let left = get_variable(left);
+                    let right = get_variable(right);
 
-                    writeln!(asm, "    ;; -- {left} - {right}");
-                    writeln!(asm, "    mov {res}, {left}");
-                    writeln!(asm, "    sub {res}, {right}");
+                    writeln!(qbe, "    # -- {left} - {right}");
+                    writeln!(qbe, "    {res} =w sub {left}, {right}");
                 }
                 Op::Plus { res, left, right } => {
-                    let res = get_register(res);
-                    let left = if let Variable::Value(Value::Constant(n)) = left {
-                        n.to_string()
-                    } else {
-                        get_register(left)
-                    };
-                    let right = if let Variable::Value(Value::Constant(n)) = right {
-                        n.to_string()
-                    } else {
-                        get_register(right)
-                    };
+                    let res = get_variable(res);
+                    let left = get_variable(left);
+                    let right = get_variable(right);
 
-                    writeln!(asm, "    ;; -- {left} + {right}");
-                    writeln!(asm, "    mov {res}, {left}");
-                    writeln!(asm, "    add {res}, {right}");
+                    writeln!(qbe, "    # -- {left} + {right}");
+                    writeln!(qbe, "    {res} =w add {left}, {right}");
                 }
                 Op::Star { res, left, right } => {
-                    let res = get_register(res);
-                    let left = if let Variable::Value(Value::Constant(n)) = left {
-                        n.to_string()
-                    } else {
-                        get_register(left)
-                    };
-                    let right = if let Variable::Value(Value::Constant(n)) = right {
-                        n.to_string()
-                    } else {
-                        get_register(right)
-                    };
+                    let res = get_variable(res);
+                    let left = get_variable(left);
+                    let right = get_variable(right);
 
-                    writeln!(asm, "    ;; -- {left} * {right}");
-                    writeln!(asm, "    xor rdx, rdx");
-                    writeln!(asm, "    mov rax, {left}");
-                    writeln!(asm, "    imul rax, {right}");
-                    writeln!(asm, "    mov {res}, rax");
+                    writeln!(qbe, "    # -- {left} * {right}");
+                    writeln!(qbe, "    {res} =w mul {left}, {right}");
                 }
                 Op::Slash { res, left, right } => {
-                    let res = get_register(res);
-                    let left = if let Variable::Value(Value::Constant(n)) = left {
-                        n.to_string()
-                    } else {
-                        get_register(left)
-                    };
-                    let right = if let Variable::Value(Value::Constant(n)) = right {
-                        n.to_string()
-                    } else {
-                        get_register(right)
-                    };
+                    let res = get_variable(res);
+                    let left = get_variable(left);
+                    let right = get_variable(right);
 
-                    writeln!(asm, "    ;; -- {left} / {right}");
-                    writeln!(asm, "    xor rdx, rdx");
-                    writeln!(asm, "    mov rax, {left}");
-                    writeln!(asm, "    mov rbx, {right}");
-                    writeln!(asm, "    idiv rbx");
-                    writeln!(asm, "    mov {res}, rax");
+                    writeln!(qbe, "    # -- {left} / {right}");
+                    writeln!(qbe, "    {res} =w div {left}, {right}");
                 }
-                Op::Syscall { num, var } => {
-                    let var = get_register(var);
+                Op::Return { var } => {
+                    let var = get_variable(var);
 
-                    writeln!(asm, "    ;; -- syscall {num}, {var}");
-                    writeln!(asm, "    mov rdi, {var}");
-                    writeln!(asm, "    mov rax, {num}");
-                    writeln!(asm, "    syscall");
+                    writeln!(qbe, "    # -- return {var}");
+                    writeln!(qbe, "    ret {var}");
+                }
+                Op::Print { var } => {
+                    let var = get_variable(var);
+
+                    writeln!(qbe, "    # -- print {var}");
+                    writeln!(qbe, "    call $printf(l $fmt_int, ..., w {var})");
                 }
             }
         }
-        asm
+
+        writeln!(qbe, r#"}}"#);
+        writeln!(qbe);
+        writeln!(qbe, r#"data $fmt_int = {{ b "%d\n", b 0 }}"#);
+        writeln!(qbe, r#"data $fmt_float = {{ b "%.6f\n", b 0 }}"#);
+
+        qbe
     }
 
-    fn get_register(res: Variable) -> String {
-        let Variable::Register(r) = res else {
-            panic!("Cannot generate ASM without assigning registers");
-        };
-        r
+    fn get_value(val: Constant) -> String {
+        match val {
+            Constant::Integer(i) => format!("{i}"),
+            Constant::Float(f) => format!("s_{f}"),
+        }
+    }
+
+    fn get_variable(res: Variable) -> String {
+        match res {
+            Variable::Temporary(t) => format!("%_t{t}"),
+            Variable::Value(v) => get_value(v),
+        }
     }
 }
 
@@ -349,7 +211,7 @@ pub mod middleend {
 
     use crate::{
         frontend::{
-            parser::{Atom, Expr, Stmt},
+            parser::{Atom, Constant, Expr, Stmt},
             AST,
         },
         shared::Operator,
@@ -382,9 +244,6 @@ pub mod middleend {
 
         reduce_ops(&mut ir);
 
-        for op in &ir.ops {
-            println!("{}", op);
-        }
         Ok(ir)
     }
 
@@ -396,10 +255,7 @@ pub mod middleend {
             let op = ir.ops[op_idx].clone();
             let mut reduced = false;
             match op {
-                Op::Assignment { res, val }
-                    if let Variable::Temporary(t) = res
-                        && let Value::Constant(c) = val =>
-                {
+                Op::Assignment { res, val } if let Variable::Temporary(t) = res => {
                     // found an assignment w/ a constant
                     for other_op_idx in op_idx..ops_count {
                         match &mut ir.ops[other_op_idx] {
@@ -411,9 +267,9 @@ pub mod middleend {
                             {
                                 reduced = true;
                                 if res.eq(left) {
-                                    *left = Variable::Value(Value::Constant(c));
+                                    *left = Variable::Value(val);
                                 } else {
-                                    *right = Variable::Value(Value::Constant(c));
+                                    *right = Variable::Value(val);
                                 }
                             }
                             _ => (),
@@ -450,8 +306,14 @@ pub mod middleend {
             Stmt::Return(expr) => {
                 expr_ops(expr, ir)?;
 
-                ir.ops.push(Op::Syscall {
-                    num: 60,
+                ir.ops.push(Op::Return {
+                    var: Variable::Temporary(ir.temps),
+                });
+            }
+            Stmt::Dump(expr) => {
+                expr_ops(expr, ir)?;
+
+                ir.ops.push(Op::Print {
                     var: Variable::Temporary(ir.temps),
                 });
             }
@@ -467,7 +329,7 @@ pub mod middleend {
                     ir.temps += 1;
                     let r = Op::Assignment {
                         res: Variable::Temporary(ir.temps),
-                        val: Value::Constant(c),
+                        val: c,
                     };
                     ir.ops.push(r);
                 }
@@ -490,7 +352,7 @@ pub mod middleend {
             ir.temps += 1;
             ir.ops.push(Op::Minus {
                 res: Variable::Temporary(ir.temps),
-                left: Variable::Value(Value::Constant(0)),
+                left: Variable::Value(Constant::Integer(0)),
                 right: Variable::Temporary(left_temp),
             });
 
@@ -539,7 +401,7 @@ pub mod middleend {
     pub enum Op {
         Assignment {
             res: Variable,
-            val: Value,
+            val: Constant,
         },
         Minus {
             res: Variable,
@@ -561,22 +423,18 @@ pub mod middleend {
             left: Variable,
             right: Variable,
         },
-        Syscall {
-            num: i64,
+        Return {
+            var: Variable,
+        },
+        Print {
             var: Variable,
         },
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq)]
     pub enum Variable {
         Temporary(u8),
-        Register(String),
-        Value(Value),
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub enum Value {
-        Constant(i64),
+        Value(crate::frontend::parser::Constant),
     }
 
     impl Display for Op {
@@ -587,7 +445,8 @@ pub mod middleend {
                 Op::Plus { res, left, right } => write!(f, "{res} := add {left} {right}",),
                 Op::Star { res, left, right } => write!(f, "{res} := mul {left} {right}",),
                 Op::Slash { res, left, right } => write!(f, "{res} := div {left} {right}",),
-                Op::Syscall { num, var } => write!(f, "_t0 := syscall {num} {var}",),
+                Op::Return { var } => write!(f, "_t0 := return {var}",),
+                Op::Print { var } => write!(f, "_t0 := print {var}",),
             }
         }
     }
@@ -596,16 +455,7 @@ pub mod middleend {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 Variable::Temporary(t) => write!(f, "_t{t}"),
-                Variable::Register(r) => write!(f, "%{r}"),
                 Variable::Value(v) => write!(f, "{v}"),
-            }
-        }
-    }
-
-    impl Display for Value {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Value::Constant(c) => write!(f, "{c}"),
             }
         }
     }
@@ -662,11 +512,18 @@ pub mod frontend {
         fn parse_stmt(token_iter: &mut TokenIter) -> CompilerResult<Stmt> {
             if let Some(t) = token_iter.next() {
                 match t {
-                    Token::Keyword(Keyword::Return) => {
-                        let expr = parse_expr(token_iter, 0)?;
-                        consume(token_iter, Token::Semicolon)?;
-                        Ok(Stmt::Return(expr))
-                    }
+                    Token::Keyword(k) => match k {
+                        Keyword::Return => {
+                            let expr = parse_expr(token_iter, 0)?;
+                            consume(token_iter, Token::Semicolon)?;
+                            Ok(Stmt::Return(expr))
+                        }
+                        Keyword::Dump => {
+                            let expr = parse_expr(token_iter, 0)?;
+                            consume(token_iter, Token::Semicolon)?;
+                            Ok(Stmt::Dump(expr))
+                        }
+                    },
                     _ => {
                         let expr = parse_expr(token_iter, 0)?;
                         consume(token_iter, Token::Semicolon)?;
@@ -700,7 +557,8 @@ pub mod frontend {
                     consume(token_iter, Token::RightParenthesis)?;
                     Expr::Parenthesis(Box::new(expr))
                 }
-                Token::Number(n) => Expr::Atom(Atom::Constant(n)),
+                Token::Integer(i) => Expr::Atom(Atom::Constant(Constant::Integer(i))),
+                Token::Float(f) => Expr::Atom(Atom::Constant(Constant::Float(f))),
                 t => {
                     panic!("wrong token {t}")
                 }
@@ -790,6 +648,7 @@ pub mod frontend {
         pub enum Stmt {
             Expr(Expr),
             Return(Expr),
+            Dump(Expr),
         }
 
         #[derive(Debug, Clone)]
@@ -801,7 +660,13 @@ pub mod frontend {
 
         #[derive(Debug, Clone, Copy)]
         pub enum Atom {
-            Constant(i64),
+            Constant(Constant),
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub enum Constant {
+            Integer(i64),
+            Float(f32),
         }
 
         impl Display for Stmt {
@@ -809,6 +674,7 @@ pub mod frontend {
                 match self {
                     Stmt::Expr(expr) => write!(f, "{expr}"),
                     Stmt::Return(expr) => write!(f, "(return {expr})"),
+                    Stmt::Dump(expr) => write!(f, "(print {expr})"),
                 }
             }
         }
@@ -855,6 +721,15 @@ pub mod frontend {
                 }
             }
         }
+
+        impl Display for Constant {
+            fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Constant::Integer(i) => write!(fmt, "{i}"),
+                    Constant::Float(f) => write!(fmt, "{f}"),
+                }
+            }
+        }
     }
 
     pub mod lexer {
@@ -895,9 +770,33 @@ pub mod frontend {
                             number.push(*c);
                             iter.next();
                         }
+                        if let Some(c) = iter.peek()
+                            && '.'.eq(c)
+                        {
+                            number.push(*c);
+                            iter.next();
+                            // next token has to be a digit!
+                            let c = iter
+                                .peek()
+                                .expect("Expected a digit after decimal dot `.` but got `EOF`");
 
-                        let value = number.parse::<i64>().unwrap();
-                        Token::Number(value)
+                            if !c.is_ascii_digit() {
+                                panic!("Expected a digit after decimal dot `.` but got `{c}`");
+                            };
+
+                            while let Some(c) = iter.peek()
+                                && c.is_ascii_digit()
+                            {
+                                number.push(*c);
+                                iter.next();
+                            }
+
+                            let value = number.parse::<f32>().unwrap();
+                            Token::Float(value)
+                        } else {
+                            let value = number.parse::<i64>().unwrap();
+                            Token::Integer(value)
+                        }
                     }
                     c if c.is_alphabetic() => {
                         let mut id = c.to_string();
@@ -929,6 +828,7 @@ pub mod frontend {
         fn get_keyword(id: &str) -> Option<Token> {
             match id {
                 "return" => Some(Token::Keyword(Keyword::Return)),
+                "dump" => Some(Token::Keyword(Keyword::Dump)),
                 _ => None,
             }
         }
@@ -955,14 +855,16 @@ pub mod shared {
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Keyword {
         Return,
+        Dump,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum Token {
         // Operators
         Operator(Operator),
         // Literals
-        Number(i64),
+        Integer(i64),
+        Float(f32),
         // Keywords
         Keyword(Keyword),
         // Others
@@ -974,22 +876,24 @@ pub mod shared {
     }
 
     impl Display for Token {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 // Token::Identifier(id) => write!(f, "{id}"),
-                Token::Number(n) => write!(f, "{n}"),
-                Token::Semicolon => write!(f, ";"),
-                Token::LeftParenthesis => write!(f, "("),
-                Token::RightParenthesis => write!(f, ")"),
-                Token::EOF => write!(f, "EOF"),
+                Token::Integer(n) => write!(fmt, "{n}"),
+                Token::Float(f) => write!(fmt, "{f}"),
+                Token::Semicolon => write!(fmt, ";"),
+                Token::LeftParenthesis => write!(fmt, "("),
+                Token::RightParenthesis => write!(fmt, ")"),
+                Token::EOF => write!(fmt, "EOF"),
                 Token::Operator(o) => match o {
-                    Operator::Minus => write!(f, "-"),
-                    Operator::Plus => write!(f, "+"),
-                    Operator::Star => write!(f, "*"),
-                    Operator::Slash => write!(f, "/"),
+                    Operator::Minus => write!(fmt, "-"),
+                    Operator::Plus => write!(fmt, "+"),
+                    Operator::Star => write!(fmt, "*"),
+                    Operator::Slash => write!(fmt, "/"),
                 },
                 Token::Keyword(k) => match k {
-                    Keyword::Return => write!(f, "return"),
+                    Keyword::Return => write!(fmt, "return"),
+                    Keyword::Dump => write!(fmt, "print"),
                 },
             }
         }
@@ -1019,202 +923,24 @@ pub mod tests {
                 && ext.eq("gobo")
             {
                 let filename = test_path.file_stem().unwrap().to_str().unwrap();
-                println!("[Compiling {:?}]", filename);
+                println!("[[Compiling {:?}]]", filename);
                 let res = compile_file(&test_path);
                 assert_eq!(Ok(()), res);
 
-                println!("[Removing files {:?}]", filename);
+                println!("--> [Removing files {:?}]", filename);
                 let output = Command::new("rm")
                     .arg(filename)
-                    .arg(format!("{filename}.o"))
-                    .arg(format!("{filename}.asm"))
+                    .arg(format!("{filename}.s"))
+                    .arg(format!("{filename}.ssa"))
                     .current_dir(tests_dir.clone())
                     .status()
                     .unwrap()
                     .code();
+
+                println!();
             }
         }
 
         Ok(())
     }
-} // pub mod compiler {
-  //     use std::{error::Error, fs::File, path::PathBuf, process::Command};
-
-//     use self::ir_generator::generate_ir;
-
-//     pub fn compile_file(file_path: PathBuf) -> Result<(), Box<dyn Error>> {
-//         let file_content = std::fs::read_to_string(file_path.clone())?;
-
-//         let tokens = tokenizer::tokenize(&file_content);
-//         let program = parser::parse(tokens);
-
-//         let output_path = file_path.with_extension("asm");
-//         let mut output = File::create(output_path.clone())?;
-//         generate_ir(output, program);
-
-//         let file_dir = output_path.parent().unwrap().to_str().unwrap();
-//         let basename = output_path
-//             .file_name()
-//             .unwrap()
-//             .to_str()
-//             .unwrap()
-//             .split_once('.')
-//             .unwrap()
-//             .0
-//             .to_string();
-//         let mut asm_file = basename.clone();
-//         asm_file.push_str(".asm");
-//         let mut obj_file = basename.clone();
-//         obj_file.push_str(".o");
-
-//         Command::new("nasm")
-//             .arg("-felf64")
-//             .arg(asm_file)
-//             .current_dir(file_dir)
-//             .spawn()
-//             .unwrap();
-//         Command::new("ld")
-//             .arg("-o")
-//             .arg(basename)
-//             .arg(obj_file)
-//             .current_dir(file_dir)
-//             .spawn()
-//             .unwrap();
-
-//         Ok(())
-//     }
-
-//     pub mod parser {
-//         use core::panic;
-//         use std::{any::Any, iter::Peekable, vec::IntoIter};
-
-//         use super::tokenizer::Token;
-
-//         pub struct Program {
-//             pub name: String,
-//             pub stmts: Vec<Statement>,
-//         }
-//         pub enum Statement {
-//             Print(Expr),
-//             Return(Expr),
-//         }
-//         pub enum Expr {
-//             Sum(i64, i64),
-//             Constant(i64),
-//         }
-
-//         type TokenIter = Peekable<IntoIter<Token>>;
-
-//         pub fn parse(tokens: Vec<Token>) -> Program {
-//             let mut token_iter = tokens.into_iter().peekable();
-
-//             let name = consume(&mut token_iter, Token::MainId);
-//             consume(&mut token_iter, Token::LeftParenthesis);
-//             consume(&mut token_iter, Token::RightParenthesis);
-//             consume(&mut token_iter, Token::LeftBrace);
-//             let stmt = parse_stmts(&mut token_iter);
-//             consume(&mut token_iter, Token::RightBrace);
-
-//             Program {
-//                 name: name.to_string(),
-//                 stmts: stmt,
-//             }
-//         }
-
-//         fn parse_stmts(token_iter: &mut TokenIter) -> Vec<Statement> {
-//             let mut stmts = Vec::new();
-//             while let Some(t) = token_iter.peek()
-//                 && t != &Token::RightBrace
-//             {
-//                 let stmt = parse_stmt(token_iter);
-//                 stmts.push(stmt);
-//             }
-//             stmts
-//         }
-
-//         fn parse_stmt(token_iter: &mut TokenIter) -> Statement {
-//             if let Some(t) = token_iter.next() {
-//                 match t {
-//                     Token::Return => {
-//                         let expr = parse_expression(token_iter);
-//                         consume(token_iter, Token::Semicolon);
-//                         Statement::Return(expr)
-//                     }
-//                     Token::Print => {
-//                         let expr = parse_expression(token_iter);
-//                         consume(token_iter, Token::Semicolon);
-//                         Statement::Print(expr)
-//                     }
-//                     _ => panic!("Expected '' but got '{t:?}'"),
-//                 }
-//             } else {
-//                 panic!("")
-//             }
-//         }
-
-//         fn parse_expression(token_iter: &mut TokenIter) -> Expr {
-//             if let Some(t) = token_iter.next() {
-//                 match t {
-//                     Token::Number(n) => Expr::Constant(n),
-//                     _ => todo!(),
-//                 }
-//             } else {
-//                 panic!("")
-//             }
-//         }
-
-//         fn consume(token_iter: &mut TokenIter, expected: Token) -> Token {
-//             if let Some(token) = token_iter.peek()
-//                 && token.type_id().eq(&expected.type_id())
-//             {
-//                 let token = token.clone();
-//                 token_iter.next();
-//                 token
-//             } else {
-//                 panic!("Expected {expected:?} but got {:?}", token_iter.peek());
-//             }
-//         }
-//     }
-
-//     pub mod ir_generator {
-//         use super::parser::{Expr, Program, Statement};
-//         use std::{fs::File, io::Write};
-
-//         pub fn generate_ir(mut output: File, program: Program) {
-//             let Program { name, stmts } = program;
-//             assert_eq!(name.as_str(), "main");
-
-//             writeln!(output, "global _start");
-//             writeln!(output, "section .text");
-//             writeln!(output, "_start:");
-
-//             generate_stmts(&mut output, stmts);
-
-//             output.sync_data();
-//         }
-
-//         fn generate_stmts(output: &mut File, stmts: Vec<Statement>) {
-//             for stmt in stmts {
-//                 match stmt {
-//                     Statement::Return(expr) => {
-//                         writeln!(output, "    mov rdi, {}", resolve_expr(expr));
-//                         writeln!(output, "    mov rax, 60");
-//                         writeln!(output, "    syscall");
-//                     }
-//                     Statement::Print(expr) => {
-//                         writeln!(output, "    mov rdi, {}", resolve_expr(expr));
-//                         writeln!(output, "    mov rax, 1");
-//                         writeln!(output, "    syscall");
-//                     }
-//                 }
-//             }
-//         }
-
-//         fn resolve_expr(expr: Expr) -> String {
-//             match expr {
-//                 Expr::Constant(i) => i.to_string(),
-//                 Expr::Sum(_, _) => todo!(),
-//             }
-//         }
-//     }
-// }
+}

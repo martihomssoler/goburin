@@ -1,10 +1,6 @@
 # GOBURIN
-My personal hobby "goblin" programming language. Meant to be simple and moddable.
 
-Overall structure:
-
-[SOURCE] -> [TOKENIZER] -> [PARSER] -> [IR GENERATOR] -> [NANOPASS]* -> [TARGET GENERATOR]
-       string         tokens       ast                il             il
+Goburin is a special-purpose family of programming-languages and toolchains to build and mantain software.
 
 # TODO
 - [ ] Self-hosted
@@ -42,17 +38,3 @@ Linux Syscall Table -> (https://filippo.io/linux-syscall-table/)
     - [ ] Reachability analysis
     - [ ] Constant propagation
     - [ ] Loop vectorization / unrolling
-
-# TinyGob
-TinyGob will be the first language we code an interpreter for. Here is what the language will support in the beginning:
-- Numerical variables
-- Basic arithmetic
-- If statements
-- While loops
-- Print text and numbers
-- Input numbers
-- Labels and goto
-- Comments
-
-The base structure of TiniGob will be Lexer -> Parser -> Emitter.
-
