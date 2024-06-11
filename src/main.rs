@@ -1,5 +1,6 @@
 #![feature(let_chains)]
 #![feature(if_let_guard)]
+#![feature(variant_count)]
 #![allow(dead_code, unused)]
 
 use std::{
@@ -132,7 +133,7 @@ pub mod backend {
             match op {
                 Op::Assignment { res, val } => {
                     let res = get_variable(res);
-                    let val = get_value(val);
+                    let val = get_variable(val);
                     writeln!(qbe, "    {res} =w copy {val}");
                 }
                 Op::Minus { res, left, right } => {
@@ -179,13 +180,40 @@ pub mod backend {
                     writeln!(qbe, "    # -- print {var}");
                     writeln!(qbe, "    call $printf(l $fmt_int, ..., w {var})");
                 }
+                Op::Label { name } => {
+                    writeln!(qbe, "@{name}");
+                }
+                Op::CheckGreater {
+                    var,
+                    true_label,
+                    false_label,
+                } => {
+                    let var = get_variable(var);
+
+                    writeln!(
+                        qbe,
+                        "    # -- jump if greater {true_label} else {false_label}"
+                    );
+                    writeln!(qbe, "    jnz {var}, @{true_label}, @{false_label}");
+                }
+                Op::Greater { res, left, right } => {
+                    let res = get_variable(res);
+                    let left = get_variable(left);
+                    let right = get_variable(right);
+
+                    writeln!(qbe, "    # -- {left} > {right}");
+                    writeln!(qbe, "    {res} =w csgtw {left}, {right}");
+                }
+                Op::Jump { dest } => {
+                    writeln!(qbe, "    # -- jump to {dest}");
+                    writeln!(qbe, "    jmp @{dest}");
+                }
             }
         }
 
         writeln!(qbe, r#"}}"#);
         writeln!(qbe);
         writeln!(qbe, r#"data $fmt_int = {{ b "%d\n", b 0 }}"#);
-        writeln!(qbe, r#"data $fmt_float = {{ b "%.6f\n", b 0 }}"#);
 
         qbe
     }
@@ -193,21 +221,21 @@ pub mod backend {
     fn get_value(val: Constant) -> String {
         match val {
             Constant::Integer(i) => format!("{i}"),
-            Constant::Float(f) => format!("s_{f}"),
         }
     }
 
-    fn get_variable(res: Variable) -> String {
-        match res {
+    fn get_variable(var: Variable) -> String {
+        match var {
             Variable::Temporary(t) => format!("%_t{t}"),
             Variable::Value(v) => get_value(v),
+            Variable::Named(id) => format!("%var_{id}"),
         }
     }
 }
 
 pub mod middleend {
 
-    use std::fmt::Display;
+    use std::{collections::HashMap, fmt::Display, ops::Deref};
 
     use crate::{
         frontend::{
@@ -236,6 +264,8 @@ pub mod middleend {
         let mut ir = IR {
             ops: Vec::new(),
             temps: 0,
+            labels: 0,
+            vars: Vec::new(),
         };
 
         for stmt in stmt_iter {
@@ -267,9 +297,9 @@ pub mod middleend {
                             {
                                 reduced = true;
                                 if res.eq(left) {
-                                    *left = Variable::Value(val);
+                                    *left = val.clone();
                                 } else {
-                                    *right = Variable::Value(val);
+                                    *right = val.clone();
                                 }
                             }
                             _ => (),
@@ -304,22 +334,92 @@ pub mod middleend {
                 expr_ops(expr, ir)?;
             }
             Stmt::Return(expr) => {
-                expr_ops(expr, ir)?;
+                let var = get_expr_variable(expr, ir)?;
 
-                ir.ops.push(Op::Return {
-                    var: Variable::Temporary(ir.temps),
+                ir.ops.push(Op::Return { var });
+            }
+            Stmt::Print(expr) => {
+                let var = get_expr_variable(expr, ir)?;
+
+                ir.ops.push(Op::Print { var });
+            }
+            // TODO(mhs): for now "let" and "mut" are basically the same
+            // I want to test how ergonomic it is to declare it that way
+            // and I will add constaints later (like "let" is constants)
+            Stmt::Let(id, expr_opt) | Stmt::Mut(id, expr_opt) => {
+                let var_temp = ir.temps;
+                ir.vars.push((id.clone(), var_temp));
+
+                if let Some(expr) = expr_opt {
+                    let val = get_expr_variable(expr, ir)?;
+                    ir.ops.push(Op::Assignment {
+                        res: Variable::Named(id),
+                        val,
+                    })
+                } else {
+                    ir.ops.push(Op::Assignment {
+                        res: Variable::Named(id),
+                        val: Variable::Value(Constant::Integer(0)), // TODO(mhs): for now memory is "zero-initialized"
+                    })
+                }
+            }
+            Stmt::Assignment(id, expr) => {
+                let val = get_expr_variable(expr, ir)?;
+
+                ir.ops.push(Op::Assignment {
+                    res: Variable::Named(id),
+                    val,
                 });
             }
-            Stmt::Dump(expr) => {
-                expr_ops(expr, ir)?;
+            Stmt::For(cond, stmts) => {
+                let begin_label = format!("begin_label_{}", ir.labels);
+                let body_label = format!("body_label_{}", ir.labels);
+                let end_label = format!("end_label_{}", ir.labels);
+                ir.labels += 1;
 
-                ir.ops.push(Op::Print {
-                    var: Variable::Temporary(ir.temps),
+                // begin label
+                ir.ops.push(Op::Label {
+                    name: begin_label.clone(),
                 });
+                // check condition, jump to end
+                let var = get_expr_variable(cond, ir)?;
+                ir.ops.push(Op::CheckGreater {
+                    var,
+                    true_label: body_label.clone(),
+                    false_label: end_label.clone(),
+                });
+                // body label
+                ir.ops.push(Op::Label {
+                    name: body_label.clone(),
+                });
+                // body
+                for stmt in stmts {
+                    stmt_ops(stmt, ir);
+                }
+                // inconditional jump to start
+                ir.ops.push(Op::Jump { dest: begin_label });
+                // end label
+                ir.ops.push(Op::Label { name: end_label });
             }
         }
 
         Ok(())
+    }
+
+    fn get_expr_variable(expr: Expr, ir: &mut IR) -> CompilerResult<Variable> {
+        let res = match expr {
+            Expr::Atom(a) => match a {
+                Atom::Constant(c) => Variable::Value(c),
+                Atom::Identifier(id) => Variable::Named(id),
+            },
+            Expr::Parenthesis(boxed_expr) => get_expr_variable(*boxed_expr, ir)?,
+            Expr::Operation(_, _) => {
+                expr_ops(expr, ir)?;
+                Variable::Temporary(ir.temps)
+            }
+        };
+
+        Ok(res)
     }
 
     fn expr_ops(expr: Expr, ir: &mut IR) -> CompilerResult<()> {
@@ -329,10 +429,11 @@ pub mod middleend {
                     ir.temps += 1;
                     let r = Op::Assignment {
                         res: Variable::Temporary(ir.temps),
-                        val: c,
+                        val: Variable::Value(c),
                     };
                     ir.ops.push(r);
                 }
+                Atom::Identifier(_) => (),
             },
             Expr::Operation(op, operands) => op_tacs(op, operands, ir)?,
             Expr::Parenthesis(expr) => expr_ops(*expr, ir)?,
@@ -344,45 +445,49 @@ pub mod middleend {
     fn op_tacs(op: Operator, operands: Vec<Expr>, ir: &mut IR) -> CompilerResult<()> {
         assert!(operands.len() <= 2);
 
-        expr_ops(operands[0].clone(), ir)?;
-        let left_temp = ir.temps;
+        let left_var = get_expr_variable(operands[0].clone(), ir)?;
 
         if operands.len() == 1 {
-            assert!(op == Operator::Minus);
+            assert_eq!(op, Operator::Minus);
             ir.temps += 1;
             ir.ops.push(Op::Minus {
                 res: Variable::Temporary(ir.temps),
                 left: Variable::Value(Constant::Integer(0)),
-                right: Variable::Temporary(left_temp),
+                right: left_var,
             });
 
             return Ok(());
         }
 
-        expr_ops(operands[1].clone(), ir)?;
-        let right_temp = ir.temps;
+        let right_var = get_expr_variable(operands[1].clone(), ir)?;
 
         ir.temps += 1;
         let ops = match op {
             Operator::Minus => Op::Minus {
                 res: Variable::Temporary(ir.temps),
-                left: Variable::Temporary(left_temp),
-                right: Variable::Temporary(right_temp),
+                left: left_var,
+                right: right_var,
             },
             Operator::Plus => Op::Plus {
                 res: Variable::Temporary(ir.temps),
-                left: Variable::Temporary(left_temp),
-                right: Variable::Temporary(right_temp),
+                left: left_var,
+                right: right_var,
             },
             Operator::Star => Op::Star {
                 res: Variable::Temporary(ir.temps),
-                left: Variable::Temporary(left_temp),
-                right: Variable::Temporary(right_temp),
+                left: left_var,
+                right: right_var,
             },
             Operator::Slash => Op::Slash {
                 res: Variable::Temporary(ir.temps),
-                left: Variable::Temporary(left_temp),
-                right: Variable::Temporary(right_temp),
+                left: left_var,
+                right: right_var,
+            },
+            Operator::Equal => todo!(),
+            Operator::Greater => Op::Greater {
+                res: Variable::Temporary(ir.temps),
+                left: left_var,
+                right: right_var,
             },
         };
 
@@ -394,6 +499,22 @@ pub mod middleend {
     pub struct IR {
         pub ops: Vec<Op>,
         pub temps: u8,
+        pub labels: u8,
+        /// Poor mans map of [ var_name => temporary assigned to it ]
+        pub vars: Vec<(String, u8)>, // TODO(mhs): improve this, making it dumb so it is easy to self-host later
+    }
+    impl IR {
+        fn get_variable_value(&self, id: &str) -> Option<u8> {
+            let ret = None;
+
+            for (var, value) in self.vars.iter() {
+                if var.eq(id) {
+                    return Some(*value);
+                }
+            }
+
+            ret
+        }
     }
 
     /// Three-address code operations
@@ -401,7 +522,7 @@ pub mod middleend {
     pub enum Op {
         Assignment {
             res: Variable,
-            val: Constant,
+            val: Variable,
         },
         Minus {
             res: Variable,
@@ -423,17 +544,34 @@ pub mod middleend {
             left: Variable,
             right: Variable,
         },
+        Greater {
+            res: Variable,
+            left: Variable,
+            right: Variable,
+        },
         Return {
             var: Variable,
         },
         Print {
             var: Variable,
         },
+        Label {
+            name: String,
+        },
+        Jump {
+            dest: String,
+        },
+        CheckGreater {
+            var: Variable,
+            true_label: String,
+            false_label: String,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq)]
     pub enum Variable {
         Temporary(u8),
+        Named(String),
         Value(crate::frontend::parser::Constant),
     }
 
@@ -447,6 +585,14 @@ pub mod middleend {
                 Op::Slash { res, left, right } => write!(f, "{res} := div {left} {right}",),
                 Op::Return { var } => write!(f, "_t0 := return {var}",),
                 Op::Print { var } => write!(f, "_t0 := print {var}",),
+                Op::Label { name } => todo!(),
+                Op::CheckGreater {
+                    var,
+                    true_label,
+                    false_label,
+                } => todo!(),
+                Op::Greater { res, left, right } => todo!(),
+                Op::Jump { dest } => todo!(),
             }
         }
     }
@@ -456,6 +602,7 @@ pub mod middleend {
             match self {
                 Variable::Temporary(t) => write!(f, "_t{t}"),
                 Variable::Value(v) => write!(f, "{v}"),
+                Variable::Named(id) => write!(f, "var_{id}"),
             }
         }
     }
@@ -485,20 +632,39 @@ pub mod frontend {
     }
 
     pub mod parser {
+        use core::panic;
         use std::fmt::Display;
+        use std::mem::discriminant;
 
-        use crate::shared::{Keyword, Operator, Token};
+        use crate::shared::{Keyword, Operator, Token, TokenKind};
         use crate::{CompilerError, CompilerResult};
 
-        type TokenIter = std::iter::Peekable<std::vec::IntoIter<Token>>;
+        pub struct TokenIter {
+            iter: std::iter::Peekable<std::vec::IntoIter<Token>>,
+        }
+
+        impl TokenIter {
+            pub fn new(iter: std::iter::Peekable<std::vec::IntoIter<Token>>) -> Self {
+                Self { iter }
+            }
+
+            pub fn peek(&mut self) -> Option<&Token> {
+                self.iter.peek()
+            }
+
+            #[allow(clippy::should_implement_trait)]
+            pub fn next(&mut self) -> Option<Token> {
+                self.iter.next()
+            }
+        }
 
         pub fn parse(tokens: Vec<Token>) -> CompilerResult<AST> {
             let mut stmts = Vec::new();
 
-            let mut token_iter: TokenIter = tokens.into_iter().peekable();
+            let mut token_iter = TokenIter::new(tokens.into_iter().peekable());
 
             while let Some(t) = token_iter.peek()
-                && !t.eq(&Token::EOF)
+                && !t.kind.eq(&TokenKind::EOF)
             {
                 let stmt = parse_stmt(&mut token_iter)?;
                 stmts.push(stmt);
@@ -511,22 +677,63 @@ pub mod frontend {
 
         fn parse_stmt(token_iter: &mut TokenIter) -> CompilerResult<Stmt> {
             if let Some(t) = token_iter.next() {
-                match t {
-                    Token::Keyword(k) => match k {
+                match t.kind {
+                    TokenKind::Keyword(k) => match k {
                         Keyword::Return => {
                             let expr = parse_expr(token_iter, 0)?;
-                            consume(token_iter, Token::Semicolon)?;
+                            consume(token_iter, TokenKind::Semicolon)?;
                             Ok(Stmt::Return(expr))
                         }
-                        Keyword::Dump => {
+                        Keyword::Print => {
+                            consume(token_iter, TokenKind::LeftParenthesis)?;
                             let expr = parse_expr(token_iter, 0)?;
-                            consume(token_iter, Token::Semicolon)?;
-                            Ok(Stmt::Dump(expr))
+                            consume(token_iter, TokenKind::RightParenthesis)?;
+                            consume(token_iter, TokenKind::Semicolon)?;
+                            Ok(Stmt::Print(expr))
+                        }
+                        Keyword::Let => {
+                            let (ident, expr_opt) = parse_declaration(token_iter)?;
+                            Ok(Stmt::Let(ident, expr_opt))
+                        }
+                        Keyword::Mut => {
+                            let (ident, expr_opt) = parse_declaration(token_iter)?;
+                            Ok(Stmt::Mut(ident, expr_opt))
+                        }
+                        Keyword::For => {
+                            let condition_expr = parse_expr(token_iter, 0)?;
+                            consume(token_iter, TokenKind::LeftParenthesis)?;
+                            let mut stmts = Vec::new();
+                            while let Some(t) = token_iter.peek()
+                                && !t.kind.eq(&TokenKind::RightParenthesis)
+                            {
+                                let stmt = parse_stmt(token_iter)?;
+                                stmts.push(stmt);
+                            }
+                            consume(token_iter, TokenKind::RightParenthesis)?;
+                            Ok(Stmt::For(condition_expr, stmts))
                         }
                     },
-                    _ => {
+                    TokenKind::Identifier(id)
+                        if token_iter
+                            .peek()
+                            .map(|t| t.kind == TokenKind::Operator(Operator::Equal))
+                            .unwrap_or(false) =>
+                    {
+                        consume(token_iter, TokenKind::Operator(Operator::Equal))?;
                         let expr = parse_expr(token_iter, 0)?;
-                        consume(token_iter, Token::Semicolon)?;
+                        consume(token_iter, TokenKind::Semicolon)?;
+                        Ok(Stmt::Assignment(id, expr))
+                    }
+                    TokenKind::Identifier(_)
+                    | TokenKind::Integer(_)
+                    | TokenKind::Operator(_)
+                    | TokenKind::Colon
+                    | TokenKind::Semicolon
+                    | TokenKind::LeftParenthesis
+                    | TokenKind::RightParenthesis
+                    | TokenKind::EOF => {
+                        let expr = parse_expr(token_iter, 0)?;
+                        consume(token_iter, TokenKind::Semicolon)?;
                         Ok(Stmt::Expr(expr))
                     }
                 }
@@ -538,6 +745,23 @@ pub mod frontend {
             }
         }
 
+        fn parse_declaration(
+            token_iter: &mut TokenIter,
+        ) -> Result<(String, Option<Expr>), CompilerError> {
+            let TokenKind::Identifier(id) =
+                consume(token_iter, TokenKind::Identifier(String::new()))?.kind
+            else {
+                panic!("The token should be an identifier");
+            };
+            let mut expr_opt = None;
+            if consume(token_iter, TokenKind::Colon).is_ok() {
+                consume(token_iter, TokenKind::Operator(Operator::Equal))?;
+                expr_opt = Some(parse_expr(token_iter, 0)?);
+            };
+            consume(token_iter, TokenKind::Semicolon)?;
+            Ok((id, expr_opt))
+        }
+
         fn parse_expr(token_iter: &mut TokenIter, bind_pow: u8) -> CompilerResult<Expr> {
             let Some(t) = token_iter.next() else {
                 // TODO: improve errors
@@ -546,19 +770,18 @@ pub mod frontend {
                 ));
             };
 
-            let mut left = match t {
-                Token::Operator(op) => {
-                    let (_, right_bind_pow) = prefix_bind_pow(&op);
+            let mut left = match t.kind {
+                TokenKind::Operator(op) if let Some((_, right_bind_pow)) = prefix_bind_pow(&op) => {
                     let expr = parse_expr(token_iter, right_bind_pow)?;
                     Expr::Operation(op, vec![expr])
                 }
-                Token::LeftParenthesis => {
+                TokenKind::LeftParenthesis => {
                     let expr = parse_expr(token_iter, 0)?;
-                    consume(token_iter, Token::RightParenthesis)?;
+                    consume(token_iter, TokenKind::RightParenthesis)?;
                     Expr::Parenthesis(Box::new(expr))
                 }
-                Token::Integer(i) => Expr::Atom(Atom::Constant(Constant::Integer(i))),
-                Token::Float(f) => Expr::Atom(Atom::Constant(Constant::Float(f))),
+                TokenKind::Integer(i) => Expr::Atom(Atom::Constant(Constant::Integer(i))),
+                TokenKind::Identifier(id) => Expr::Atom(Atom::Identifier(id)),
                 t => {
                     panic!("wrong token {t}")
                 }
@@ -572,8 +795,8 @@ pub mod frontend {
                     ));
                 };
 
-                let op = match t {
-                    Token::Operator(op) => op,
+                let op = match &t.kind {
+                    TokenKind::Operator(op) => op,
                     _ => break,
                 };
 
@@ -604,37 +827,71 @@ pub mod frontend {
             Ok(left)
         }
 
+        /// TODO(mhs): shamelessly stolen from odin-lang at (https://odin-lang.org/docs/overview/#operator-precedence)
+        /// and adapted to our needs with the following rule in mind
+        /// we use and odd number for the bare priority and bump it up by one for associativity
+        /// Bind Power      Operator
+        ///     15          unary operations
+        ///     13          *   /   %   %%   &   &~  <<   >>
+        ///     11          +   -   |   ~    in  not_in
+        ///      9          ==  !=  <   >    <=  >=
+        ///      7          &&
+        ///      5          ||
+        ///      3          ..=    ..<
+        ///      1          or_else  =  ?    if  when
+
         // TODO: make a single function for the binding powers
         fn postfix_bind_pow(op: &Operator) -> Option<(u8, ())> {
             None
         }
 
-        fn prefix_bind_pow(op: &Operator) -> ((), u8) {
-            match op {
-                Operator::Plus | Operator::Minus => ((), 5),
+        fn prefix_bind_pow(op: &Operator) -> Option<((), u8)> {
+            let res = match op {
+                Operator::Plus | Operator::Minus => ((), 15),
+                Operator::Equal => return None,
                 _ => panic!("bad prefix op: {op:?}"),
-            }
+            };
+
+            Some(res)
         }
 
         fn infix_bind_pow(op: &Operator) -> Option<(u8, u8)> {
-            // as a general rule we use and odd number for the bare priority and bump it up by one for associativity
             let res = match op {
-                Operator::Plus | Operator::Minus => (1, 2),
-                Operator::Star | Operator::Slash => (3, 4),
-                _ => return None,
+                Operator::Plus | Operator::Minus => (11, 12),
+                Operator::Star | Operator::Slash => (13, 14),
+                Operator::Greater => (9, 10),
+                Operator::Equal => (1, 2), // TODO(mhs): is equal right associative?
+                _ => panic!("bad prefix op: {op:?}"),
             };
             Some(res)
         }
 
-        fn consume(token_iter: &mut TokenIter, expected: Token) -> CompilerResult<Token> {
+        fn consume(token_iter: &mut TokenIter, expected: TokenKind) -> CompilerResult<Token> {
             if let Some(actual) = token_iter.peek()
-                && actual.eq(&expected)
+                && match actual.kind {
+                    // we want to know the exact token
+                    TokenKind::Operator(_) | TokenKind::Keyword(_) => actual.kind.eq(&expected),
+                    // for variables and other symbols, a discriminant comparison is enough
+                    TokenKind::Integer(_)
+                    | TokenKind::Identifier(_)
+                    | TokenKind::Colon
+                    | TokenKind::Semicolon
+                    | TokenKind::LeftParenthesis
+                    | TokenKind::RightParenthesis
+                    | TokenKind::EOF => discriminant(&actual.kind) == discriminant(&expected),
+                }
             {
                 Ok(token_iter.next().unwrap())
             } else {
+                let Some(token) = token_iter.peek() else {
+                    return Err(CompilerError::Generic(format!(
+                        "Expected '{expected}' but got 'None' ",
+                    )));
+                };
+                let location = token.location();
                 Err(CompilerError::Generic(format!(
-                    "Expected '{expected}' but got '{:?}'",
-                    token_iter.peek()
+                    "Expected '{expected}' but got '{:?}' on {}",
+                    token, location,
                 )))
             }
         }
@@ -648,7 +905,11 @@ pub mod frontend {
         pub enum Stmt {
             Expr(Expr),
             Return(Expr),
-            Dump(Expr),
+            Print(Expr),
+            Let(String, Option<Expr>),
+            Mut(String, Option<Expr>),
+            Assignment(String, Expr),
+            For(Expr, Vec<Stmt>),
         }
 
         #[derive(Debug, Clone)]
@@ -658,23 +919,33 @@ pub mod frontend {
             Operation(Operator, Vec<Expr>),
         }
 
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone)]
         pub enum Atom {
             Constant(Constant),
+            Identifier(String),
         }
 
         #[derive(Debug, Clone, Copy, PartialEq)]
         pub enum Constant {
             Integer(i64),
-            Float(f32),
         }
 
         impl Display for Stmt {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
-                    Stmt::Expr(expr) => write!(f, "{expr}"),
-                    Stmt::Return(expr) => write!(f, "(return {expr})"),
-                    Stmt::Dump(expr) => write!(f, "(print {expr})"),
+                    Stmt::Expr(expr) => writeln!(f, "{expr}"),
+                    Stmt::Return(expr) => writeln!(f, "(return {expr})"),
+                    Stmt::Print(expr) => writeln!(f, "(print {expr})"),
+                    Stmt::Let(id, expr_opt) => writeln!(f, "(let {id} {expr_opt:?})"),
+                    Stmt::Mut(id, expr_opt) => writeln!(f, "(mut {id} {expr_opt:?})"),
+                    Stmt::Assignment(id, expr) => writeln!(f, "(= {id} {expr:})"),
+                    Stmt::For(cond, stmts) => {
+                        writeln!(f, "(for {cond}")?;
+                        for stmt in stmts {
+                            writeln!(f, "\t{stmt}")?;
+                        }
+                        writeln!(f, ")")
+                    }
                 }
             }
         }
@@ -702,22 +973,11 @@ pub mod frontend {
                 }
             }
         }
-
-        impl Display for Operator {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
-                    Operator::Minus => write!(f, "-"),
-                    Operator::Plus => write!(f, "+"),
-                    Operator::Star => write!(f, "*"),
-                    Operator::Slash => write!(f, "/"),
-                }
-            }
-        }
-
         impl Display for Atom {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
                     Atom::Constant(c) => write!(f, "{c}"),
+                    Atom::Identifier(id) => write!(f, "{id}"),
                 }
             }
         }
@@ -726,7 +986,6 @@ pub mod frontend {
             fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
                     Constant::Integer(i) => write!(fmt, "{i}"),
-                    Constant::Float(f) => write!(fmt, "{f}"),
                 }
             }
         }
@@ -736,32 +995,49 @@ pub mod frontend {
         pub fn tokenize(source: &str) -> CompilerResult<Vec<Token>> {
             let mut iter = source.chars().peekable();
 
-            let mut tokens = Vec::new();
+            let mut line = 1;
+            let mut col = 0;
+
+            let mut tokens: Vec<Token> = Vec::new();
             loop {
                 let Some(c) = iter.next() else {
                     break;
                 };
+                col += 1;
 
-                let t = match c {
+                let kind = match c {
                     ' ' => continue,
-                    '-' => Token::Operator(Operator::Minus),
-                    '+' => Token::Operator(Operator::Plus),
-                    '*' => Token::Operator(Operator::Star),
+                    '\t' => {
+                        // TODO(mhs): a tab counts as 4 columns, for now
+                        col += 3;
+                        continue;
+                    }
+                    '\n' => {
+                        col = 0;
+                        line += 1;
+                        continue;
+                    }
+                    '=' => TokenKind::Operator(Operator::Equal),
+                    '-' => TokenKind::Operator(Operator::Minus),
+                    '+' => TokenKind::Operator(Operator::Plus),
+                    '*' => TokenKind::Operator(Operator::Star),
+                    '>' => TokenKind::Operator(Operator::Greater),
                     '/' => {
                         if iter.peek().is_some_and(|nt| '/'.eq(nt)) {
                             while let Some(nt) = iter.next()
                                 && !'\n'.eq(&nt)
                             {}
+                            col = 0;
+                            line += 1;
                             continue;
                         } else {
-                            Token::Operator(Operator::Slash)
+                            TokenKind::Operator(Operator::Slash)
                         }
                     }
-                    '(' => Token::LeftParenthesis,
-                    ')' => Token::RightParenthesis,
-                    // '{' => Token::LeftBrace,
-                    // '}' => Token::RightBrace,
-                    ';' => Token::Semicolon,
+                    '(' => TokenKind::LeftParenthesis,
+                    ')' => TokenKind::RightParenthesis,
+                    ':' => TokenKind::Colon,
+                    ';' => TokenKind::Semicolon,
                     d if d.is_ascii_digit() => {
                         let mut number = c.to_string();
                         while let Some(c) = iter.peek()
@@ -769,34 +1045,10 @@ pub mod frontend {
                         {
                             number.push(*c);
                             iter.next();
+                            col += 1;
                         }
-                        if let Some(c) = iter.peek()
-                            && '.'.eq(c)
-                        {
-                            number.push(*c);
-                            iter.next();
-                            // next token has to be a digit!
-                            let c = iter
-                                .peek()
-                                .expect("Expected a digit after decimal dot `.` but got `EOF`");
-
-                            if !c.is_ascii_digit() {
-                                panic!("Expected a digit after decimal dot `.` but got `{c}`");
-                            };
-
-                            while let Some(c) = iter.peek()
-                                && c.is_ascii_digit()
-                            {
-                                number.push(*c);
-                                iter.next();
-                            }
-
-                            let value = number.parse::<f32>().unwrap();
-                            Token::Float(value)
-                        } else {
-                            let value = number.parse::<i64>().unwrap();
-                            Token::Integer(value)
-                        }
+                        let value = number.parse::<i64>().unwrap();
+                        TokenKind::Integer(value)
                     }
                     c if c.is_alphabetic() => {
                         let mut id = c.to_string();
@@ -805,36 +1057,46 @@ pub mod frontend {
                         {
                             id.push(*c);
                             iter.next();
+                            col += 1;
                         }
 
                         if let Some(keyword) = get_keyword(&id) {
                             keyword
                         } else {
-                            panic!("{id} is not a keyword");
-                            // Token::Identifier(id)
+                            TokenKind::Identifier(id)
                         }
                     }
-                    _ => continue,
+                    _ => panic!("Unexpected character {c:?}"),
                 };
 
-                tokens.push(t);
+                let token = Token { kind, line, col };
+                tokens.push(token);
             }
 
-            tokens.push(Token::EOF);
+            let token = Token {
+                kind: TokenKind::EOF,
+                line,
+                col,
+            };
+            tokens.push(token);
 
             Ok(tokens)
         }
 
-        fn get_keyword(id: &str) -> Option<Token> {
+        fn get_keyword(id: &str) -> Option<TokenKind> {
+            assert_eq!(std::mem::variant_count::<Keyword>(), 5);
             match id {
-                "return" => Some(Token::Keyword(Keyword::Return)),
-                "dump" => Some(Token::Keyword(Keyword::Dump)),
+                "return" => Some(TokenKind::Keyword(Keyword::Return)),
+                "print" => Some(TokenKind::Keyword(Keyword::Print)),
+                "let" => Some(TokenKind::Keyword(Keyword::Let)),
+                "mut" => Some(TokenKind::Keyword(Keyword::Mut)),
+                "for" => Some(TokenKind::Keyword(Keyword::For)),
                 _ => None,
             }
         }
 
         use crate::{
-            shared::{Keyword, Operator, Token},
+            shared::{Keyword, Operator, Token, TokenKind},
             CompilerResult,
         };
         use std::fmt::Display;
@@ -850,24 +1112,30 @@ pub mod shared {
         Plus,
         Star,
         Slash,
+        Equal,
+        Greater,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Keyword {
         Return,
-        Dump,
+        Print,
+        Let,
+        Mut,
+        For,
     }
 
     #[derive(Clone, Debug, PartialEq)]
-    pub enum Token {
+    pub enum TokenKind {
         // Operators
         Operator(Operator),
         // Literals
         Integer(i64),
-        Float(f32),
         // Keywords
         Keyword(Keyword),
         // Others
+        Identifier(String),
+        Colon,
         Semicolon,
         LeftParenthesis,
         RightParenthesis,
@@ -875,26 +1143,63 @@ pub mod shared {
         EOF,
     }
 
-    impl Display for Token {
+    impl Display for TokenKind {
         fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 // Token::Identifier(id) => write!(f, "{id}"),
-                Token::Integer(n) => write!(fmt, "{n}"),
-                Token::Float(f) => write!(fmt, "{f}"),
-                Token::Semicolon => write!(fmt, ";"),
-                Token::LeftParenthesis => write!(fmt, "("),
-                Token::RightParenthesis => write!(fmt, ")"),
-                Token::EOF => write!(fmt, "EOF"),
-                Token::Operator(o) => match o {
-                    Operator::Minus => write!(fmt, "-"),
-                    Operator::Plus => write!(fmt, "+"),
-                    Operator::Star => write!(fmt, "*"),
-                    Operator::Slash => write!(fmt, "/"),
-                },
-                Token::Keyword(k) => match k {
-                    Keyword::Return => write!(fmt, "return"),
-                    Keyword::Dump => write!(fmt, "print"),
-                },
+                TokenKind::Integer(n) => write!(fmt, "{n}"),
+                TokenKind::Colon => write!(fmt, ":"),
+                TokenKind::Semicolon => write!(fmt, ";"),
+                TokenKind::LeftParenthesis => write!(fmt, "("),
+                TokenKind::RightParenthesis => write!(fmt, ")"),
+                TokenKind::EOF => write!(fmt, "EOF"),
+                TokenKind::Operator(o) => o.fmt(fmt),
+                TokenKind::Keyword(k) => k.fmt(fmt),
+                TokenKind::Identifier(id) => write!(fmt, "'{id}'"),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Token {
+        pub kind: TokenKind,
+        pub line: usize,
+        pub col: usize,
+    }
+
+    impl Token {
+        pub fn location(&self) -> String {
+            format!("[ line:{} ; col:{} ]", self.line, self.col)
+        }
+    }
+
+    impl Display for Token {
+        fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.kind.fmt(fmt)
+        }
+    }
+
+    impl Display for Keyword {
+        fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Keyword::Return => write!(fmt, "return"),
+                Keyword::Print => write!(fmt, "print"),
+                Keyword::Let => write!(fmt, "let"),
+                Keyword::Mut => write!(fmt, "mut"),
+                Keyword::For => write!(fmt, "for"),
+            }
+        }
+    }
+
+    impl Display for Operator {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Operator::Minus => write!(f, "-"),
+                Operator::Plus => write!(f, "+"),
+                Operator::Star => write!(f, "*"),
+                Operator::Slash => write!(f, "/"),
+                Operator::Equal => write!(f, "="),
+                Operator::Greater => write!(f, ">"),
             }
         }
     }
@@ -906,7 +1211,7 @@ pub mod tests {
         fs::File,
         io::{self, Write},
         path::PathBuf,
-        process::Command,
+        process::{Command, ExitStatus},
     };
 
     use crate::compile_file;
@@ -923,11 +1228,41 @@ pub mod tests {
                 && ext.eq("gobo")
             {
                 let filename = test_path.file_stem().unwrap().to_str().unwrap();
-                println!("[[Compiling {:?}]]", filename);
+
+                let output_file = test_path.clone().with_extension("output");
+                let Ok(expected_output_content) = std::fs::read_to_string(output_file) else {
+                    println!(
+                        "ERROR --> Skipping {:?} : No '.output' file found for it",
+                        filename
+                    );
+                    return Err(std::io::Error::last_os_error());
+                };
+
+                println!("[[ Compiling '{:}' ]]", filename);
                 let res = compile_file(&test_path);
                 assert_eq!(Ok(()), res);
 
-                println!("--> [Removing files {:?}]", filename);
+                println!("--> [ Executing '{:}' ]", filename);
+                let actual_output = Command::new(format!("./{}", filename))
+                    // .arg(format!(" > {}.test_output", filename))
+                    .current_dir(tests_dir.clone())
+                    .output()?;
+                // .spawn()?
+                // .wait()?;
+                assert_eq!(
+                    actual_output.status,
+                    <ExitStatus as std::default::Default>::default()
+                );
+
+                println!(
+                    "--> [ Comparing execution of '{:}' with '.output' file ]",
+                    filename
+                );
+                let actual_output_content =
+                    std::str::from_utf8(&actual_output.stdout).expect("Output should be UTF-8");
+                assert_eq!(actual_output_content, expected_output_content);
+
+                println!("--> [ Removing files '{:}' ]", filename);
                 let output = Command::new("rm")
                     .arg(filename)
                     .arg(format!("{filename}.s"))
