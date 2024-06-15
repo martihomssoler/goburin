@@ -60,9 +60,9 @@ we use keywords for the exponential and the modulo operator which are "pow" and 
 =   asignment
 #   compiler directives
 $   reserved words
-()  collections (unnamed members like tuples, or nammed like structs and enums)
-{}  code block
-[]  arrays
+()  collections (unnamed members like tuples, nammed members like structs, enums and unions)
+{}  sets, maps
+[]  arrays, vectors, lists
 <>  variable capturing for a code block
 '   Char delimiter
 "   String delimiter
@@ -78,9 +78,9 @@ $   reserved words
 
 // type aliases
 float : F64            // f32, F64 
-Int: I32               // un/signed I8, U8, I16, U16, I32, U32, I64, u64, U128
-String : Char[]        // <-- TBD: to be decided
-Char :                 // <-- TBD: to be decided
+int: I32               // un/signed I8, U8, I16, U16, I32, U32, I64, u64, U128
+string : char[]        // <-- TBD: to be decided
+char :                 // <-- TBD: to be decided
 ```
 ## Taken from JAI
 ```cpp
@@ -99,7 +99,7 @@ Char :                 // <-- TBD: to be decided
 // defined as "name : type = value"
 // where ":" is the type definition, and "=" is the value assignment.
 counter : int = 0
-name : String = "Goblin"
+name : string = "Goblin"
 average : float = 3.14
 // if the type is omitted then the compiler infers it based on the value
 counter := 0               // an int
@@ -107,25 +107,26 @@ name := "Goblin"           // a String
 average := 3.14            // a float
 // if the value is omitted then you have a declaration without an initialization.
 counter : int
-name : String
+name : string
 average : float
 
 // --- Pointers
-// pointers have the same idea as in Pascal, but changed the symbol to "&" since in too many languages the "^" is a "dead-key" which makes it hard to type
-pointer : &Int= &5            // creating a pointer to an int
-value := pointer&             // dereferencing the pointer to its value (Int)
-zero_ptr : &Int               // the default value for pointers is 0.
+// pointers have the same idea as in Pascal,
+// we use the address operator to create a pointer to the address
+pointer : ^int = &5            // creating a pointer to an int
+value := pointer^              // dereferencing the pointer to its value (int)
+zero_ptr : ^int                // the default value for pointers is 0.
 
 // --- Arrays and Ranges
 // arrays are a homogeneous list and are declared as follows
 // we can declare arrays statically, they have a length at compile-time
 array : [8] float     // "8-long array of floats"
-array : [8] &float    // "8-long array of pointers to floats"
-array : &[8] float    // "pointer to an 8-long array floats"
+array : [8] ^float    // "8-long array of pointers to floats"
+array : ^[8] float    // "pointer to an 8-long array floats"
 // or dynamically, same as Rust Vec (pointer, len, capacity)
 array : [..] float      // "dynamically-long array of floats"
-array : [..] &float     // "dynamically-long array of pointers to floats"
-array : &[..] float     // "pointer to a dynamically-long array floats"
+array : [..] ^float     // "dynamically-long array of pointers to floats"
+array : ^[..] float     // "pointer to a dynamically-long array floats"
 // if you do not want a u64 as the default index size, you could do
 array : [8:U8] float    // "dynamically-long array of floats w/ U8 index-size"
 array : [..:U8] float   // "8-long array of floats w/ U8 index-size"

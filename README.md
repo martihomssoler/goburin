@@ -12,9 +12,15 @@ Goburin is a special-purpose family of programming-languages and toolchains to b
 
 ## Links
 Linux Syscall Table -> (https://filippo.io/linux-syscall-table/)
-(https://www.youtube.com/watch?v=8QP2fDBIxjM&list=PLpM-Dvs8t0VbMZA7wW9aR3EtBqe2kinu4)
-(https://norasandler.com/2017/11/29/Write-a-Compiler.html)
-(http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf)
+
+* https://www.youtube.com/watch?v=8QP2fDBIxjM&list=PLpM-Dvs8t0VbMZA7wW9aR3EtBqe2kinu4
+* https://norasandler.com/2017/11/29/Write-a-Compiler.html
+* http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf
+* https://boxbase.org/entries/2018/mar/5/hindley-milner/
+* https://www.labri.fr/perso/casteran/CoqArt/Tsinghua/C5.pdf
+* https://github.com/wh5a/Algorithm-W-Step-By-Step
+* http://steshaw.org/hm/hindley-milner.pdf
+* https://course.ccs.neu.edu/cs4410sp19/lec_type-inference_notes.html
 
 ## FUTURE
 - [ ] Frontend
@@ -38,3 +44,44 @@ Linux Syscall Table -> (https://filippo.io/linux-syscall-table/)
     - [ ] Reachability analysis
     - [ ] Constant propagation
     - [ ] Loop vectorization / unrolling
+
+# Low Goburin
+
+## Hello World
+```cpp
+let std = import std
+
+pub main : () = (
+    std.println("Hello, {}!", "world")
+)
+```
+
+## Comments
+Goburin supports single-line comments only. Doc comments will be added in the future.
+
+```cpp
+let println = import std.println
+
+pub main : () = (
+    // Comments start with "//" and end at the next end of line
+    // println("Hello?") <-- comments are ignored and not executed 
+    
+    println("Hello, {}!", "world")
+)
+```
+
+## Values
+Goburin, at the moment, only supports bools and un/signed 8/32 and "word-sized" integers.
+
+```cpp
+pub main : () = (
+    let a: bool,  // true or false
+    let b: i8,    // signed 8-bit integer
+    let c: u8,    // unsigned 8-bit integer
+    let d: i32,   // signed 32-bit integer
+    let e: u32,   // unsigned 32-bit integer
+    let f: iptr,  // signed sized integer
+    let g: uptr,  // unsigned sized integer
+)
+```
+

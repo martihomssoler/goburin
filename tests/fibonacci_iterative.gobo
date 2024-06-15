@@ -1,7 +1,7 @@
 mut n := 10;
 mut temp;
-let a := 0;
-let b := 1;
+mut a := 0;
+mut b := 1;
 
 print(a);
 for n > 0 (
