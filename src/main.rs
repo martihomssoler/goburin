@@ -99,7 +99,7 @@ fn compile_qbe(file_path: &Path, qbe: String) -> CompilerResult<()> {
 pub enum CompilerError {
     LexerError,
     ParserError,
-    SemanticError,
+    SemanticError(String),
     IRError,
     QBEError,
     Generic(String),

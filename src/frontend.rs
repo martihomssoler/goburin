@@ -12,44 +12,76 @@ pub fn generate_ast(source: &str) -> CompilerResult<AST> {
 pub mod semantic {
     use std::collections::HashMap;
 
-    use self::{
-        algorithm_w::*,
-        lamba_calc::{MonoType, Variable},
-    };
+    use self::{lamba_calc::*, type_inference::*};
 
     use super::parser::AST;
-    use crate::{semantic::lamba_calc::*, CompilerResult};
+    use crate::CompilerResult;
 
     /// empty for now
     pub fn analyze(ast: AST) -> CompilerResult<AST> {
-        let mut counter = 0;
+        let mut count = 0;
 
-        let u = unify(
-            MonoType::ApplicationType {
-                func: FunctionType::Arrow,
-                args: [
-                    MonoType::VariableType(VariableType("a".to_string())),
-                    MonoType::VariableType(VariableType("a".to_string())),
-                ]
-                .into(),
-            },
-            MonoType::ApplicationType {
-                func: FunctionType::Arrow,
-                args: [
-                    MonoType::ApplicationType {
-                        func: FunctionType::Int,
-                        args: [].into(),
-                    },
-                    MonoType::ApplicationType {
-                        func: FunctionType::Bool,
-                        args: [].into(),
-                    },
-                ]
-                .into(),
-            },
-        );
+        let ctx = Context::new(&[
+            (
+                Variable("not".to_string()),
+                PolyType::MonoType(MonoType::ApplicationType {
+                    func: FunctionType::Arrow,
+                    args: [
+                        MonoType::ApplicationType {
+                            func: FunctionType::Bool,
+                            args: [].to_vec(),
+                        },
+                        MonoType::ApplicationType {
+                            func: FunctionType::Bool,
+                            args: [].to_vec(),
+                        },
+                    ]
+                    .to_vec(),
+                }),
+            ),
+            (
+                Variable("odd".to_string()),
+                PolyType::MonoType(MonoType::ApplicationType {
+                    func: FunctionType::Arrow,
+                    args: [
+                        MonoType::ApplicationType {
+                            func: FunctionType::Int,
+                            args: [].to_vec(),
+                        },
+                        MonoType::ApplicationType {
+                            func: FunctionType::Bool,
+                            args: [].to_vec(),
+                        },
+                    ]
+                    .to_vec(),
+                }),
+            ),
+            (
+                Variable("true".to_string()),
+                PolyType::MonoType(MonoType::ApplicationType {
+                    func: FunctionType::Bool,
+                    args: [].to_vec(),
+                }),
+            ),
+            (
+                Variable("false".to_string()),
+                PolyType::MonoType(MonoType::ApplicationType {
+                    func: FunctionType::Bool,
+                    args: [].to_vec(),
+                }),
+            ),
+        ]);
 
-        println!("{:}", u);
+        let expr = Expression::Application {
+            func: Box::new(Expression::Variable(Variable("not".to_string()))),
+            arg: Box::new(Expression::Variable(Variable("true".to_string()))),
+        };
+
+        let beta = MonoType::VariableType(VariableType::new(&mut count));
+
+        let m = m(ctx, &expr, beta, 0)?;
+
+        println!("{:?}", m);
 
         Ok(ast)
     }
@@ -75,13 +107,13 @@ pub mod semantic {
 
         pub enum Expression {
             Variable(Variable),
-            Application {
-                func: Box<Expression>,
-                arg: Box<Expression>,
-            },
             Abstraction {
                 var: Variable,
                 abs: Box<Expression>,
+            },
+            Application {
+                func: Box<Expression>,
+                arg: Box<Expression>,
             },
             Let {
                 var: Variable,
@@ -150,6 +182,7 @@ pub mod semantic {
         }
 
         // Context
+        #[derive(Debug, PartialEq, Eq, Clone)]
         pub struct Context {
             pub map: HashMap<Variable, PolyType>,
         }
@@ -164,19 +197,178 @@ pub mod semantic {
 
                 Context { map }
             }
+
+            pub fn mappings(&self) -> Vec<(Variable, PolyType)> {
+                self.map
+                    .iter()
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect()
+            }
         }
     }
 
-    pub mod algorithm_w {
+    // TODO(mhs): decide which algorithm for type inference works best for Goburin, W or M.
+    pub mod type_inference {
         use std::{collections::HashMap, fmt::Display, ops::Deref, process::exit};
+
+        use crate::{CompilerError, CompilerResult};
 
         use super::{
             lamba_calc::{Context, MonoType, PolyType, Variable},
-            VariableType,
+            Expression, VariableType,
         };
 
-        #[derive(Debug, PartialEq, Eq, Clone)]
-        struct A;
+        // top-down approach
+        pub fn m(
+            ctx: Context,
+            expr: &Expression,
+            typ: MonoType,
+            mut count: usize,
+        ) -> CompilerResult<Substitution> {
+            match expr {
+                Expression::Variable(var) => {
+                    let Some(value) = ctx.map.get(var) else {
+                        return Err(CompilerError::SemanticError(format!(
+                            "Undefined variable '{}'",
+                            var.0
+                        )));
+                    };
+
+                    Ok(unify(typ, instantiate(value, &mut count, [].into())))
+                }
+                Expression::Abstraction { var, abs } => {
+                    let beta1 = MonoType::VariableType(VariableType::new(&mut count));
+                    let beta2 = MonoType::VariableType(VariableType::new(&mut count));
+
+                    let s1 = unify(
+                        typ,
+                        MonoType::ApplicationType {
+                            func: super::FunctionType::Arrow,
+                            args: [beta1.clone(), beta2.clone()].to_vec(),
+                        },
+                    );
+
+                    let new_ctx = Context::new(
+                        &[
+                            s1.apply_ctx(ctx).mappings(),
+                            [(var.clone(), PolyType::MonoType(s1.apply_mono(&beta1)))].into(),
+                        ]
+                        .concat(),
+                    );
+                    let s2 = m(new_ctx, abs.deref(), s1.apply_mono(&beta2), count)?;
+
+                    Ok(s2.combine(&s1))
+                }
+                Expression::Application { func, arg } => {
+                    let beta = MonoType::VariableType(VariableType::new(&mut count));
+                    let s1 = m(
+                        ctx.clone(),
+                        func.deref(),
+                        MonoType::ApplicationType {
+                            func: super::FunctionType::Arrow,
+                            args: [beta.clone(), typ].to_vec(),
+                        },
+                        count,
+                    )?;
+
+                    let s2 = m(s1.apply_ctx(ctx), arg.deref(), s1.apply_mono(&beta), count)?;
+
+                    Ok(s2.combine(&s1))
+                }
+                Expression::Let { var, value, body } => {
+                    let beta = MonoType::VariableType(VariableType::new(&mut count));
+                    let s1 = m(ctx.clone(), value.deref(), beta.clone(), count)?;
+
+                    let new_ctx = Context::new(
+                        &[
+                            s1.apply_ctx(ctx.clone()).mappings(),
+                            [(
+                                var.clone(),
+                                generalise(&s1.apply_ctx(ctx), s1.apply_mono(&beta)),
+                            )]
+                            .into(),
+                        ]
+                        .concat(),
+                    );
+                    let s2 = m(new_ctx, body.deref(), s1.apply_mono(&typ), count)?;
+
+                    Ok(s2.combine(&s1))
+                }
+            }
+        }
+
+        // bottom-up approach
+        pub fn w(
+            ctx: Context,
+            expr: &Expression,
+            mut count: usize,
+        ) -> CompilerResult<(Substitution, MonoType)> {
+            match expr {
+                Expression::Variable(var) => {
+                    let Some(value) = ctx.map.get(var) else {
+                        return Err(CompilerError::SemanticError(format!(
+                            "Undefined variable '{}'",
+                            var.0
+                        )));
+                    };
+
+                    Ok((
+                        Substitution::new(&[]),
+                        instantiate(value, &mut count, [].into()),
+                    ))
+                }
+                Expression::Abstraction { var, abs } => {
+                    let beta = MonoType::VariableType(VariableType::new(&mut count));
+                    let new_ctx = Context::new(
+                        &[
+                            ctx.mappings(),
+                            [(var.clone(), PolyType::MonoType(beta.clone()))].into(),
+                        ]
+                        .concat(),
+                    );
+                    let (s1, t1) = w(new_ctx, abs.deref(), count)?;
+
+                    Ok((
+                        s1.clone(),
+                        s1.apply_mono(&MonoType::ApplicationType {
+                            func: super::FunctionType::Arrow,
+                            args: [beta, t1].to_vec(),
+                        }),
+                    ))
+                }
+                Expression::Application { func, arg } => {
+                    let (s1, t1) = w(ctx.clone(), func.deref(), count)?;
+                    // println!("s: {s1}, t: {t1}");
+                    let (s2, t2) = w(s1.apply_ctx(ctx), arg.deref(), count)?;
+                    // println!("s: {s2}, t: {t2}");
+                    let beta = MonoType::VariableType(VariableType::new(&mut count));
+
+                    let s3 = unify(
+                        s2.apply_mono(&t1),
+                        MonoType::ApplicationType {
+                            func: super::FunctionType::Arrow,
+                            args: [t2, beta.clone()].to_vec(),
+                        },
+                    );
+
+                    Ok((s3.combine(&s2.combine(&s1)), s3.apply_mono(&beta)))
+                }
+                Expression::Let { var, value, body } => {
+                    let (s1, t1) = w(ctx.clone(), value.deref(), count)?;
+                    let applied_ctx = s1.apply_ctx(ctx);
+                    let new_ctx = Context::new(
+                        &[
+                            applied_ctx.mappings(),
+                            [(var.clone(), generalise(&applied_ctx, t1.clone()))].into(),
+                        ]
+                        .concat(),
+                    );
+                    let (s2, t2) = w(new_ctx, body.deref(), count)?;
+
+                    Ok((s2.combine(&s1), t2))
+                }
+            }
+        }
 
         // substitution -> apply + combine
         #[derive(Debug, PartialEq, Eq, Clone)]
@@ -278,11 +470,11 @@ pub mod semantic {
 
         // instatiate
         pub fn instantiate(
-            poly: PolyType,
+            poly: &PolyType,
             count: &mut usize,
             mut mappings: HashMap<String, VariableType>,
         ) -> MonoType {
-            match &poly {
+            match poly {
                 PolyType::MonoType(m) => match m {
                     MonoType::VariableType(var) => {
                         if let Some(typ) = mappings.get(&var.0) {
@@ -296,7 +488,7 @@ pub mod semantic {
                             .iter()
                             .map(|arg| {
                                 instantiate(
-                                    PolyType::MonoType(arg.clone()),
+                                    &PolyType::MonoType(arg.clone()),
                                     count,
                                     mappings.clone(),
                                 )
@@ -311,7 +503,7 @@ pub mod semantic {
                 },
                 PolyType::QuantifierType { name, sigma } => {
                     mappings.insert(name.to_owned(), VariableType::new(count));
-                    instantiate(sigma.deref().clone(), count, mappings)
+                    instantiate(sigma.deref(), count, mappings)
                 }
             }
         }
