@@ -19,56 +19,59 @@ fn write_qbe(ir: IR) -> String {
     writeln!(qbe, r#"export function w $main() {{"#);
     writeln!(qbe, r#"@start"#);
 
-    for op in ir.ops {
+    for op in &ir.ops {
         match op {
             Op::Assignment { res, val } => {
-                let res = get_variable(res);
-                let val = get_variable(val);
+                let res = res.to_string();
+                let val = val.to_string();
                 writeln!(qbe, "    {res} =w copy {val}");
             }
             Op::Minus { res, left, right } => {
-                let res = get_variable(res);
-                let left = get_variable(left);
-                let right = get_variable(right);
+                let res = res.to_string();
+                let left = left.to_string();
+                let right = right.to_string();
 
                 writeln!(qbe, "    # -- {left} - {right}");
                 writeln!(qbe, "    {res} =w sub {left}, {right}");
             }
             Op::Plus { res, left, right } => {
-                let res = get_variable(res);
-                let left = get_variable(left);
-                let right = get_variable(right);
+                let res = res.to_string();
+                let left = left.to_string();
+                let right = right.to_string();
 
                 writeln!(qbe, "    # -- {left} + {right}");
                 writeln!(qbe, "    {res} =w add {left}, {right}");
             }
             Op::Star { res, left, right } => {
-                let res = get_variable(res);
-                let left = get_variable(left);
-                let right = get_variable(right);
+                let res = res.to_string();
+                let left = left.to_string();
+                let right = right.to_string();
 
                 writeln!(qbe, "    # -- {left} * {right}");
                 writeln!(qbe, "    {res} =w mul {left}, {right}");
             }
             Op::Slash { res, left, right } => {
-                let res = get_variable(res);
-                let left = get_variable(left);
-                let right = get_variable(right);
+                let res = res.to_string();
+                let left = left.to_string();
+                let right = right.to_string();
 
                 writeln!(qbe, "    # -- {left} / {right}");
                 writeln!(qbe, "    {res} =w div {left}, {right}");
             }
             Op::Return { var } => {
-                let var = get_variable(var);
+                let var = var.to_string();
 
                 writeln!(qbe, "    # -- return {var}");
                 writeln!(qbe, "    ret {var}");
             }
             Op::Print { var } => {
-                let var = get_variable(var);
-
                 writeln!(qbe, "    # -- print {var}");
-                writeln!(qbe, "    call $printf(l $fmt_int, ..., w {var})");
+                if let Some(var) = ir.get_string_var(var) {
+                    writeln!(qbe, "    call $printf(l $fmt_str, ..., w ${var})");
+                } else {
+                    let var = var.to_string();
+                    writeln!(qbe, "    call $printf(l $fmt_int, ..., w {var})");
+                }
             }
             Op::Label { name } => {
                 writeln!(qbe, "@{name}");
@@ -78,7 +81,7 @@ fn write_qbe(ir: IR) -> String {
                 true_label,
                 false_label,
             } => {
-                let var = get_variable(var);
+                let var = var.to_string();
 
                 writeln!(
                     qbe,
@@ -87,9 +90,9 @@ fn write_qbe(ir: IR) -> String {
                 writeln!(qbe, "    jnz {var}, @{true_label}, @{false_label}");
             }
             Op::Greater { res, left, right } => {
-                let res = get_variable(res);
-                let left = get_variable(left);
-                let right = get_variable(right);
+                let res = res.to_string();
+                let left = left.to_string();
+                let right = right.to_string();
 
                 writeln!(qbe, "    # -- {left} > {right}");
                 writeln!(qbe, "    {res} =w csgtw {left}, {right}");
@@ -104,20 +107,17 @@ fn write_qbe(ir: IR) -> String {
     writeln!(qbe, r#"}}"#);
     writeln!(qbe);
     writeln!(qbe, r#"data $fmt_int = {{ b "%d\n", b 0 }}"#);
+    writeln!(qbe, r#"data $fmt_str = {{ b "%s\n", b 0 }}"#);
+
+    write_all_strs(&mut qbe, &ir);
 
     qbe
 }
 
-fn get_value(val: Constant) -> String {
-    match val {
-        Constant::Integer(i) => format!("{i}"),
-    }
-}
-
-fn get_variable(var: Variable) -> String {
-    match var {
-        Variable::Temporary(t) => format!("%_t{t}"),
-        Variable::Value(v) => get_value(v),
-        Variable::Named(id) => format!("%var_{id}"),
+fn write_all_strs(qbe: &mut String, ir: &IR) {
+    writeln!(qbe);
+    for (_, (str_id, str_data)) in &ir.strs {
+        writeln!(qbe, r#"data ${str_id}.len = {{ w {} }}"#, str_data.len());
+        writeln!(qbe, r#"data ${str_id} = {{ b "{str_data}" }}"#);
     }
 }

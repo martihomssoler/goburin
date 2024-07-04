@@ -29,6 +29,7 @@ fn generate_ops(ast: AST) -> CompilerResult<IR> {
         temps: 0,
         labels: 0,
         vars: Vec::new(),
+        strs: Vec::new(),
     };
 
     for stmt in stmt_iter {
@@ -114,7 +115,15 @@ fn stmt_ops(stmt: Stmt, ir: &mut IR) -> CompilerResult<()> {
             ir.vars.push((id.clone(), var_temp));
 
             if let Some(expr) = expr_opt {
-                let val = get_expr_variable(expr, ir)?;
+                let mut val = get_expr_variable(expr, ir)?;
+
+                if let Variable::String(s) = &val {
+                    let str_id = format!("str_{}", ir.strs.len());
+                    let var_id = id.clone();
+                    ir.strs.push((var_id, (str_id.clone(), s.clone())));
+                    val = Variable::String(str_id);
+                };
+
                 ir.ops.push(Op::Assignment {
                     res: Variable::Named(id),
                     val,
@@ -174,6 +183,7 @@ fn get_expr_variable(expr: Expr, ir: &mut IR) -> CompilerResult<Variable> {
         Expr::Atom(a) => match a {
             Atom::Constant(c) => Variable::Value(c),
             Atom::Identifier(id) => Variable::Named(id),
+            Atom::String(s) => Variable::String(s),
         },
         Expr::Parenthesis(boxed_expr) => get_expr_variable(*boxed_expr, ir)?,
         Expr::Operation(_, _) => {
@@ -197,6 +207,7 @@ fn expr_ops(expr: Expr, ir: &mut IR) -> CompilerResult<()> {
                 ir.ops.push(r);
             }
             Atom::Identifier(_) => (),
+            Atom::String(_) => todo!(),
         },
         Expr::Operation(op, operands) => op_tacs(op, operands, ir)?,
         Expr::Parenthesis(expr) => expr_ops(*expr, ir)?,
@@ -265,6 +276,8 @@ pub struct IR {
     pub labels: u8,
     /// Poor mans map of [ var_name => temporary assigned to it ]
     pub vars: Vec<(String, u8)>, // TODO(mhs): improve this, making it dumb so it is easy to self-host later
+    /// Poor mans map of [ var_name => (str_id, str_data) ]
+    pub strs: Vec<(String, (String, String))>, // TODO(mhs): improve this, making it dumb so it is easy to self-host later
 }
 impl IR {
     fn get_variable_value(&self, id: &str) -> Option<u8> {
@@ -273,6 +286,22 @@ impl IR {
         for (var, value) in self.vars.iter() {
             if var.eq(id) {
                 return Some(*value);
+            }
+        }
+
+        ret
+    }
+
+    pub fn get_string_var(&self, var: &Variable) -> Option<String> {
+        let Variable::Named(id) = var else {
+            return None;
+        };
+
+        let ret = None;
+
+        for (var_id, (str_id, _)) in self.strs.iter() {
+            if var_id.eq(id) {
+                return Some(str_id.clone());
             }
         }
 
@@ -335,6 +364,7 @@ pub enum Op {
 pub enum Variable {
     Temporary(u8),
     Named(String),
+    String(String),
     Value(crate::frontend::parser::Constant),
 }
 
@@ -363,9 +393,10 @@ impl Display for Op {
 impl Display for Variable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Variable::Temporary(t) => write!(f, "_t{t}"),
+            Variable::Temporary(t) => write!(f, "%_t{t}"),
             Variable::Value(v) => write!(f, "{v}"),
-            Variable::Named(id) => write!(f, "var_{id}"),
+            Variable::Named(id) => write!(f, "%var_{id}"),
+            Variable::String(s) => write!(f, "${s}"),
         }
     }
 }

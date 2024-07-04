@@ -19,70 +19,6 @@ pub mod semantic {
 
     /// empty for now
     pub fn analyze(ast: AST) -> CompilerResult<AST> {
-        let mut count = 0;
-
-        let ctx = Context::new(&[
-            (
-                Variable("not".to_string()),
-                PolyType::MonoType(MonoType::ApplicationType {
-                    func: FunctionType::Arrow,
-                    args: [
-                        MonoType::ApplicationType {
-                            func: FunctionType::Bool,
-                            args: [].to_vec(),
-                        },
-                        MonoType::ApplicationType {
-                            func: FunctionType::Bool,
-                            args: [].to_vec(),
-                        },
-                    ]
-                    .to_vec(),
-                }),
-            ),
-            (
-                Variable("odd".to_string()),
-                PolyType::MonoType(MonoType::ApplicationType {
-                    func: FunctionType::Arrow,
-                    args: [
-                        MonoType::ApplicationType {
-                            func: FunctionType::Int,
-                            args: [].to_vec(),
-                        },
-                        MonoType::ApplicationType {
-                            func: FunctionType::Bool,
-                            args: [].to_vec(),
-                        },
-                    ]
-                    .to_vec(),
-                }),
-            ),
-            (
-                Variable("true".to_string()),
-                PolyType::MonoType(MonoType::ApplicationType {
-                    func: FunctionType::Bool,
-                    args: [].to_vec(),
-                }),
-            ),
-            (
-                Variable("false".to_string()),
-                PolyType::MonoType(MonoType::ApplicationType {
-                    func: FunctionType::Bool,
-                    args: [].to_vec(),
-                }),
-            ),
-        ]);
-
-        let expr = Expression::Application {
-            func: Box::new(Expression::Variable(Variable("not".to_string()))),
-            arg: Box::new(Expression::Variable(Variable("true".to_string()))),
-        };
-
-        let beta = MonoType::VariableType(VariableType::new(&mut count));
-
-        let m = m(ctx, &expr, beta, 0)?;
-
-        println!("{:?}", m);
-
         Ok(ast)
     }
 
@@ -735,6 +671,7 @@ pub mod parser {
                 }
                 TokenKind::Identifier(_)
                 | TokenKind::Integer(_)
+                | TokenKind::String(_)
                 | TokenKind::Operator(_)
                 | TokenKind::Colon
                 | TokenKind::Semicolon
@@ -790,6 +727,7 @@ pub mod parser {
                 Expr::Parenthesis(Box::new(expr))
             }
             TokenKind::Integer(i) => Expr::Atom(Atom::Constant(Constant::Integer(i))),
+            TokenKind::String(s) => Expr::Atom(Atom::String(s)),
             TokenKind::Identifier(id) => Expr::Atom(Atom::Identifier(id)),
             t => {
                 panic!("wrong token {t}")
@@ -882,6 +820,7 @@ pub mod parser {
                 TokenKind::Operator(_) | TokenKind::Keyword(_) => actual.kind.eq(&expected),
                 // for variables and other symbols, a discriminant comparison is enough
                 TokenKind::Integer(_)
+                | TokenKind::String(_)
                 | TokenKind::Identifier(_)
                 | TokenKind::Colon
                 | TokenKind::Semicolon
@@ -932,6 +871,7 @@ pub mod parser {
     pub enum Atom {
         Constant(Constant),
         Identifier(String),
+        String(String),
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -987,6 +927,7 @@ pub mod parser {
             match self {
                 Atom::Constant(c) => write!(f, "{c}"),
                 Atom::Identifier(id) => write!(f, "{id}"),
+                Atom::String(s) => write!(f, "{s}"),
             }
         }
     }
@@ -1001,6 +942,8 @@ pub mod parser {
 }
 
 pub mod lexer {
+    type PeekableCharIter<'c> = std::iter::Peekable<std::str::Chars<'c>>;
+
     pub fn tokenize(source: &str) -> CompilerResult<Vec<Token>> {
         let mut iter = source.chars().peekable();
 
@@ -1059,6 +1002,7 @@ pub mod lexer {
                     let value = number.parse::<i64>().unwrap();
                     TokenKind::Integer(value)
                 }
+                '"' => parse_string(c, &mut iter, &mut col),
                 c if c.is_alphabetic() => {
                     let mut id = c.to_string();
                     while let Some(c) = iter.peek()
@@ -1090,6 +1034,47 @@ pub mod lexer {
         tokens.push(token);
 
         Ok(tokens)
+    }
+
+    fn parse_string(c: char, iter: &mut PeekableCharIter, col: &mut usize) -> TokenKind {
+        let mut can_escape = false;
+        let mut id = String::new();
+        while let Some(c) = iter.peek() {
+            let ch = if can_escape {
+                match c {
+                    // replace("\\\\", "\\")
+                    '\\' => {
+                        id.pop();
+                        '\\'
+                    }
+                    // replace("\\n", "\n")
+                    'n' => {
+                        id.pop();
+                        '\n'
+                    }
+                    // replace("\\\"", "\"")
+                    '\"' => {
+                        id.pop();
+                        '\"'
+                    }
+                    _ => *c,
+                }
+            } else {
+                *c
+            };
+
+            let is_str_ending = !can_escape && c.eq(&'"');
+            can_escape = !can_escape && c.eq(&'\\');
+            iter.next();
+            *col += 1;
+
+            if is_str_ending {
+                return TokenKind::String(id);
+            }
+
+            id.push(ch);
+        }
+        TokenKind::EOF
     }
 
     fn get_keyword(id: &str) -> Option<TokenKind> {

@@ -25,6 +25,7 @@ pub enum TokenKind {
     Operator(Operator),
     // Literals
     Integer(i64),
+    String(String),
     // Keywords
     Keyword(Keyword),
     // Others
@@ -40,8 +41,8 @@ pub enum TokenKind {
 impl Display for TokenKind {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            // Token::Identifier(id) => write!(f, "{id}"),
             TokenKind::Integer(n) => write!(fmt, "{n}"),
+            TokenKind::String(s) => write!(fmt, "{s}"),
             TokenKind::Colon => write!(fmt, ":"),
             TokenKind::Semicolon => write!(fmt, ";"),
             TokenKind::LeftParenthesis => write!(fmt, "("),

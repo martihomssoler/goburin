@@ -156,11 +156,9 @@ pub mod tests {
 
                 println!("--> [ Executing '{:}' ]", filename);
                 let actual_output = Command::new(format!("./{}", filename))
-                    // .arg(format!(" > {}.test_output", filename))
                     .current_dir(tests_dir.clone())
                     .output()?;
-                // .spawn()?
-                // .wait()?;
+
                 assert_eq!(
                     actual_output.status,
                     <ExitStatus as std::default::Default>::default()
