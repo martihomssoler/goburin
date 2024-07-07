@@ -3,6 +3,13 @@
 version = 3
 
 [[package]]
+name = "goburin"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -49,13 +56,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "tiny_goburin"
-version = "0.1.0"
-dependencies = [
- "thiserror",
 ]
 
 [[package]]

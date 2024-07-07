@@ -13,6 +13,7 @@ Goburin is a special-purpose family of programming-languages and toolchains to b
 ## Links
 Linux Syscall Table -> (https://filippo.io/linux-syscall-table/)
 
+* [Introduction to Compilers and Language Design](https://www3.nd.edu/~dthain/compilerbook/compilerbook.pdf)
 * https://www.youtube.com/watch?v=8QP2fDBIxjM&list=PLpM-Dvs8t0VbMZA7wW9aR3EtBqe2kinu4
 * https://norasandler.com/2017/11/29/Write-a-Compiler.html
 * http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf

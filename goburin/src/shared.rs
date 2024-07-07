@@ -8,6 +8,7 @@ pub enum Operator {
     Slash,
     Equal,
     Greater,
+    Lower,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub enum Keyword {
     Print,
     Const,
     Mut,
+    Let,
     For,
 }
 
@@ -34,6 +36,8 @@ pub enum TokenKind {
     Semicolon,
     LeftParenthesis,
     RightParenthesis,
+    LeftBracket,
+    RightBracket,
     // EOF
     EOF,
 }
@@ -47,6 +51,8 @@ impl Display for TokenKind {
             TokenKind::Semicolon => write!(fmt, ";"),
             TokenKind::LeftParenthesis => write!(fmt, "("),
             TokenKind::RightParenthesis => write!(fmt, ")"),
+            TokenKind::LeftBracket => write!(fmt, "["),
+            TokenKind::RightBracket => write!(fmt, "]"),
             TokenKind::EOF => write!(fmt, "EOF"),
             TokenKind::Operator(o) => o.fmt(fmt),
             TokenKind::Keyword(k) => k.fmt(fmt),
@@ -81,6 +87,7 @@ impl Display for Keyword {
             Keyword::Print => write!(fmt, "print"),
             Keyword::Const => write!(fmt, "const"),
             Keyword::Mut => write!(fmt, "mut"),
+            Keyword::Let => write!(fmt, "let"),
             Keyword::For => write!(fmt, "for"),
         }
     }
@@ -95,6 +102,7 @@ impl Display for Operator {
             Operator::Slash => write!(f, "/"),
             Operator::Equal => write!(f, "="),
             Operator::Greater => write!(f, ">"),
+            Operator::Lower => write!(f, "<"),
         }
     }
 }

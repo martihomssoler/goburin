@@ -644,6 +644,10 @@ pub mod parser {
                         let (ident, expr_opt) = parse_declaration(token_iter)?;
                         Ok(Stmt::Mut(ident, expr_opt))
                     }
+                    Keyword::Let => {
+                        let (ident, expr_opt) = parse_declaration(token_iter)?;
+                        Ok(Stmt::Let(ident, expr_opt))
+                    }
                     Keyword::For => {
                         let condition_expr = parse_expr(token_iter, 0)?;
                         consume(token_iter, TokenKind::LeftParenthesis)?;
@@ -658,6 +662,7 @@ pub mod parser {
                         Ok(Stmt::For(condition_expr, stmts))
                     }
                 },
+                // id = ?;
                 TokenKind::Identifier(id)
                     if token_iter
                         .peek()
@@ -669,6 +674,18 @@ pub mod parser {
                     consume(token_iter, TokenKind::Semicolon)?;
                     Ok(Stmt::Assignment(id, expr))
                 }
+                // id[?]
+                TokenKind::Identifier(id)
+                    if token_iter
+                        .peek()
+                        .map(|t| t.kind == TokenKind::LeftBracket)
+                        .unwrap_or(false) =>
+                {
+                    consume(token_iter, TokenKind::LeftBracket)?;
+                    let expr = parse_expr(token_iter, 0)?;
+                    consume(token_iter, TokenKind::RightBracket)?;
+                    Ok(Stmt::ArrayIndexing(id, expr))
+                }
                 TokenKind::Identifier(_)
                 | TokenKind::Integer(_)
                 | TokenKind::String(_)
@@ -677,6 +694,8 @@ pub mod parser {
                 | TokenKind::Semicolon
                 | TokenKind::LeftParenthesis
                 | TokenKind::RightParenthesis
+                | TokenKind::LeftBracket
+                | TokenKind::RightBracket
                 | TokenKind::EOF => {
                     let expr = parse_expr(token_iter, 0)?;
                     consume(token_iter, TokenKind::Semicolon)?;
@@ -806,7 +825,7 @@ pub mod parser {
         let res = match op {
             Operator::Plus | Operator::Minus => (11, 12),
             Operator::Star | Operator::Slash => (13, 14),
-            Operator::Greater => (9, 10),
+            Operator::Greater | Operator::Lower => (9, 10),
             Operator::Equal => (1, 2), // TODO(mhs): is equal right associative?
             _ => panic!("bad prefix op: {op:?}"),
         };
@@ -826,6 +845,8 @@ pub mod parser {
                 | TokenKind::Semicolon
                 | TokenKind::LeftParenthesis
                 | TokenKind::RightParenthesis
+                | TokenKind::LeftBracket
+                | TokenKind::RightBracket
                 | TokenKind::EOF => discriminant(&actual.kind) == discriminant(&expected),
             }
         {
@@ -858,6 +879,7 @@ pub mod parser {
         Mut(String, Option<Expr>),
         Assignment(String, Expr),
         For(Expr, Vec<Stmt>),
+        ArrayIndexing(String, Expr),
     }
 
     #[derive(Debug, Clone)]
@@ -895,6 +917,7 @@ pub mod parser {
                     }
                     writeln!(f, ")")
                 }
+                Stmt::ArrayIndexing(_, _) => todo!(),
             }
         }
     }
@@ -974,6 +997,7 @@ pub mod lexer {
                 '+' => TokenKind::Operator(Operator::Plus),
                 '*' => TokenKind::Operator(Operator::Star),
                 '>' => TokenKind::Operator(Operator::Greater),
+                '<' => TokenKind::Operator(Operator::Lower),
                 '/' => {
                     if iter.peek().is_some_and(|nt| '/'.eq(nt)) {
                         while let Some(nt) = iter.next()
@@ -988,6 +1012,8 @@ pub mod lexer {
                 }
                 '(' => TokenKind::LeftParenthesis,
                 ')' => TokenKind::RightParenthesis,
+                '[' => TokenKind::LeftBracket,
+                ']' => TokenKind::RightBracket,
                 ':' => TokenKind::Colon,
                 ';' => TokenKind::Semicolon,
                 d if d.is_ascii_digit() => {
@@ -1078,13 +1104,14 @@ pub mod lexer {
     }
 
     fn get_keyword(id: &str) -> Option<TokenKind> {
-        assert_eq!(std::mem::variant_count::<Keyword>(), 5);
+        assert_eq!(std::mem::variant_count::<Keyword>(), 6);
 
         match id {
             _ if format!("{}", Keyword::Return).eq(id) => Some(TokenKind::Keyword(Keyword::Return)),
             _ if format!("{}", Keyword::Print).eq(id) => Some(TokenKind::Keyword(Keyword::Print)),
             _ if format!("{}", Keyword::Const).eq(id) => Some(TokenKind::Keyword(Keyword::Const)),
             _ if format!("{}", Keyword::Mut).eq(id) => Some(TokenKind::Keyword(Keyword::Mut)),
+            _ if format!("{}", Keyword::Let).eq(id) => Some(TokenKind::Keyword(Keyword::Let)),
             _ if format!("{}", Keyword::For).eq(id) => Some(TokenKind::Keyword(Keyword::For)),
             _ => None,
         }

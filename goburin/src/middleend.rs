@@ -155,7 +155,7 @@ fn stmt_ops(stmt: Stmt, ir: &mut IR) -> CompilerResult<()> {
             });
             // check condition, jump to end
             let var = get_expr_variable(cond, ir)?;
-            ir.ops.push(Op::CheckGreater {
+            ir.ops.push(Op::JumpIfNotZero {
                 var,
                 true_label: body_label.clone(),
                 false_label: end_label.clone(),
@@ -173,6 +173,7 @@ fn stmt_ops(stmt: Stmt, ir: &mut IR) -> CompilerResult<()> {
             // end label
             ir.ops.push(Op::Label { name: end_label });
         }
+        Stmt::ArrayIndexing(_, _) => todo!(),
     }
 
     Ok(())
@@ -263,6 +264,11 @@ fn op_tacs(op: Operator, operands: Vec<Expr>, ir: &mut IR) -> CompilerResult<()>
             left: left_var,
             right: right_var,
         },
+        Operator::Lower => Op::Lower {
+            res: Variable::Temporary(ir.temps),
+            left: left_var,
+            right: right_var,
+        },
     };
 
     ir.ops.push(ops);
@@ -341,6 +347,11 @@ pub enum Op {
         left: Variable,
         right: Variable,
     },
+    Lower {
+        res: Variable,
+        left: Variable,
+        right: Variable,
+    },
     Return {
         var: Variable,
     },
@@ -353,7 +364,7 @@ pub enum Op {
     Jump {
         dest: String,
     },
-    CheckGreater {
+    JumpIfNotZero {
         var: Variable,
         true_label: String,
         false_label: String,
@@ -379,12 +390,13 @@ impl Display for Op {
             Op::Return { var } => write!(f, "_t0 := return {var}",),
             Op::Print { var } => write!(f, "_t0 := print {var}",),
             Op::Label { name } => todo!(),
-            Op::CheckGreater {
+            Op::JumpIfNotZero {
                 var,
                 true_label,
                 false_label,
             } => todo!(),
             Op::Greater { res, left, right } => todo!(),
+            Op::Lower { res, left, right } => todo!(),
             Op::Jump { dest } => todo!(),
         }
     }

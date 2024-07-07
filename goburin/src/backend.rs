@@ -76,7 +76,7 @@ fn write_qbe(ir: IR) -> String {
             Op::Label { name } => {
                 writeln!(qbe, "@{name}");
             }
-            Op::CheckGreater {
+            Op::JumpIfNotZero {
                 var,
                 true_label,
                 false_label,
@@ -85,7 +85,7 @@ fn write_qbe(ir: IR) -> String {
 
                 writeln!(
                     qbe,
-                    "    # -- jump if greater {true_label} else {false_label}"
+                    "    # -- jump if not zero {true_label} else {false_label}"
                 );
                 writeln!(qbe, "    jnz {var}, @{true_label}, @{false_label}");
             }
@@ -96,6 +96,14 @@ fn write_qbe(ir: IR) -> String {
 
                 writeln!(qbe, "    # -- {left} > {right}");
                 writeln!(qbe, "    {res} =w csgtw {left}, {right}");
+            }
+            Op::Lower { res, left, right } => {
+                let res = res.to_string();
+                let left = left.to_string();
+                let right = right.to_string();
+
+                writeln!(qbe, "    # -- {left} < {right}");
+                writeln!(qbe, "    {res} =w csltw {left}, {right}");
             }
             Op::Jump { dest } => {
                 writeln!(qbe, "    # -- jump to {dest}");
