@@ -16,9 +16,9 @@ fn main() -> Result<(), String> {
 
 pub fn compile_file(file_path: &PathBuf) -> Result<(), String> {
     let source = std::fs::read_to_string(file_path).unwrap();
-    let result_frontend = frontend::frontend_pass(&source)?;
-    // let result_middleend = middleend::middleend_pass(result_frontend);
-    // let result_backend = backend::backend_pass(result_middleend);
+    let ast = frontend::frontend_pass(&source)?;
+    let ir = middleend::middleend_pass(ast)?;
+    let result_backend = backend::backend_pass(ir);
     Ok(())
 }
 

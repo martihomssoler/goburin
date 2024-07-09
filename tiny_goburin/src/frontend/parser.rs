@@ -109,7 +109,7 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                         idx += 1;
                     }
 
-                    let stmt_print = Stmt::Print { vals: values };
+                    let stmt_print = Stmt::Print(Print { vals: values });
                     stmts.push(stmt_print);
                 }
                 _ => {
@@ -131,7 +131,10 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
         return Err(errors.join("\n"));
     }
 
-    Ok(Ast { stmts })
+    Ok(Ast {
+        stmts,
+        symbol_table: SymbolTable::default(),
+    })
 }
 
 fn consume(strict: bool, actual: &Token<TokenKind>, expected: TokenKind) -> Result<(), String> {

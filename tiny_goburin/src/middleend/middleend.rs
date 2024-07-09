@@ -1,3 +1,5 @@
-// pub(crate) fn middleend_pass(result_frontend: _) -> _ {
-//     todo!()
-// }
+use crate::frontend::Ast;
+
+pub fn middleend_pass(ast: Ast) -> Result<Ast, String> {
+    Ok(ast)
+}

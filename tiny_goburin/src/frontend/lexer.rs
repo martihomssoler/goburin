@@ -161,7 +161,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     "true" => TokenKind::Keyword(Keyword::True),
                     "while" => TokenKind::Keyword(Keyword::While),
                     // Types
-                    "array" => TokenKind::Type(Type::Array),
+                    "array" => TokenKind::Type(Type::Array(Box::new(Type::Void))),
                     "bool" => TokenKind::Type(Type::Bool),
                     "char" => TokenKind::Type(Type::Char),
                     "int" => TokenKind::Type(Type::Int),
