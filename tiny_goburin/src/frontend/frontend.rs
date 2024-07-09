@@ -1,401 +1,175 @@
 mod lexer;
+mod parser;
 
 pub(crate) fn frontend_pass(source: &str) -> Result<(), String> {
     let tokens = lexer::l_tokenize(source)?;
+    print_tokens(&tokens);
 
-    // println!(
-    //     "Tokens --> {}",
-    //     tokens
-    //         .iter()
-    //         .map(|t| t.to_string())
-    //         .collect::<Vec<String>>()
-    //         .join(", ")
-    // );
+    let ast = parser::p_parse(tokens)?;
+    print_ast(&ast);
 
-    let ast = parser_parse(tokens)?;
-
-    println!(
-        "AST --> {}",
-        ast.stmts
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<Vec<String>>()
-            .join(", ")
-    );
+    let _ = semantic_resolve(ast)?;
 
     Ok(())
 }
 
-pub fn parser_parse(tokens: Vec<Token<TokenKind>>) -> Result<AST, String> {
-    let mut errors: Vec<String> = Vec::new();
-    let mut stmts = Vec::new();
-    let mut idx = 0;
+pub fn semantic_resolve(ast: Ast) -> Result<(), String> {
+    let mut symbol_table = SymbolTable::default();
 
-    while idx < tokens.len() {
-        let token = &tokens[idx];
-        idx += 1;
+    // name resolution
+    for i in 0..ast.stmts.len() {
+        resolve_stmt(&mut symbol_table, ast.stmts[i].clone());
+    }
 
-        match &token.kind {
-            TokenKind::Value(Value::Identifier(id)) => {
-                // assignment or declaration
+    Ok(())
+}
 
-                // declaration form
-                // identifier : type = value;
-                {
-                    consume(true, &tokens[idx], TokenKind::Symbol(Symbol::Colon))?;
-                    idx += 1;
-                }
-                let typ = {
-                    consume(false, &tokens[idx], TokenKind::Type(Type::Void))?;
-                    let TokenKind::Type(ref decl_typ) = tokens[idx].kind else {
-                        unreachable!()
-                    };
-                    let typ = Token {
-                        kind: decl_typ.clone(),
-                        line: tokens[idx].line,
-                        col: tokens[idx].col,
-                    };
-                    idx += 1;
-                    typ
-                };
-                {
-                    consume(true, &tokens[idx], TokenKind::Symbol(Symbol::Equal))?;
-                    idx += 1;
-                }
-                let val = {
-                    consume(
-                        false,
-                        &tokens[idx],
-                        TokenKind::Value(Value::Constant(Constant::Bool(false))),
-                    )?;
-                    let TokenKind::Value(ref decl_val) = tokens[idx].kind else {
-                        unreachable!()
-                    };
-                    let val = Token {
-                        kind: decl_val.clone(),
-                        line: tokens[idx].line,
-                        col: tokens[idx].col,
-                    };
-                    idx += 1;
-                    val
-                };
-                {
-                    consume(true, &tokens[idx], TokenKind::Symbol(Symbol::Semicolon))?;
-                    idx += 1;
-                }
-
-                let stmt_decl = Stmt::Decl {
-                    id: Token {
-                        kind: id.clone(),
-                        line: token.line,
-                        col: token.col,
-                    },
-                    typ,
-                    val,
-                };
-                stmts.push(stmt_decl);
+fn resolve_stmt(symbol_table: &mut SymbolTable, stmt: Stmt) {
+    match stmt {
+        Stmt::Decl { id, typ, val } => resolve_decl(symbol_table, id, typ, val),
+        Stmt::Print { vals } => {
+            for v in vals {
+                resolve_val(symbol_table, v);
             }
-            TokenKind::Keyword(kw) => match kw {
-                Keyword::Print => {
-                    let mut values = Vec::new();
-                    let mut next_is_comma = false;
-
-                    while idx < tokens.len()
-                        && !matches!(
-                            tokens[idx].kind,
-                            TokenKind::Symbol(Symbol::Semicolon) | TokenKind::Eof
-                        )
-                    {
-                        if next_is_comma {
-                            consume(true, &tokens[idx], TokenKind::Symbol(Symbol::Comma))?;
-                            next_is_comma = false;
-                        } else {
-                            consume(
-                                false,
-                                &tokens[idx],
-                                TokenKind::Value(Value::Constant(Constant::Bool(false))),
-                            )?;
-                            let TokenKind::Value(ref decl_val) = tokens[idx].kind else {
-                                unreachable!()
-                            };
-                            let val = Token {
-                                kind: decl_val.clone(),
-                                line: tokens[idx].line,
-                                col: tokens[idx].col,
-                            };
-                            values.push(val);
-                            next_is_comma = true;
-                        }
-
-                        idx += 1;
-                    }
-                    {
-                        consume(true, &tokens[idx], TokenKind::Symbol(Symbol::Semicolon))?;
-                        idx += 1;
-                    }
-
-                    let stmt_print = Stmt::Print { vals: values };
-                    stmts.push(stmt_print);
-                }
-                _ => {
-                    unimplemented!("Keyword {kw:?} not supported yet!")
-                }
-            },
-            TokenKind::Type(_) | TokenKind::Symbol(_) | TokenKind::Value(_) => {
-                errors.push(format!(
-                    "Unexpected token {:?} at line {} and col {}",
-                    token.kind, token.line, token.col
-                ));
-                continue;
-            }
-            TokenKind::Eof => break,
         }
     }
-
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
-    }
-
-    Ok(AST { stmts })
 }
 
-fn consume(strict: bool, actual: &Token<TokenKind>, expected: TokenKind) -> Result<(), String> {
-    let is_match = if strict {
-        actual.kind.eq(&expected)
+fn resolve_decl(
+    symbol_table: &mut SymbolTable,
+    id: Token<Identifier>,
+    typ: Token<Type>,
+    val: Token<Value>,
+) {
+    let symbol_kind = if symbol_table.scope_level() > 1 {
+        SymbolKind::Local { pos: 0 }
     } else {
-        std::mem::discriminant(&actual.kind) == std::mem::discriminant(&expected)
+        SymbolKind::Global
     };
 
-    if is_match {
-        Ok(())
-    } else {
-        Err(format!(
-            "Expected '{:?}' but got '{:?}' on line {} and col {}",
-            expected, actual.kind, actual.line, actual.col
-        ))
+    let symbol = Symbol {
+        name: id.kind.0,
+        kind: symbol_kind,
+        typ: typ.kind,
+    };
+
+    resolve_val(symbol_table, val);
+    symbol_table.scope_symbol_bind(symbol);
+}
+
+fn resolve_val(symbol_table: &SymbolTable, v: Token<Value>) {
+    match v.kind {
+        Value::Constant(_) => (),
+        Value::Identifier(id) => {
+            if symbol_table.scope_symbol_lookup(&id.0).is_none() {
+                println!(
+                    "[ERROR]: Use of undeclared variable {} in {}:{}",
+                    id.0, v.line, v.col
+                );
+            }
+        }
     }
 }
 
-// fn parse_stmt(token_iter: &mut TokenIter) -> CompilerResult<Stmt> {
-//     if let Some(t) = token_iter.next() {
-//         match t.kind {
-//             TokenKind::Keyword(k) => match k {
-//                 Keyword::Return => {
-//                     let expr = parse_expr(token_iter, 0)?;
-//                     consume(token_iter, TokenKind::Semicolon)?;
-//                     Ok(Stmt::Return(expr))
-//                 }
-//                 Keyword::Print => {
-//                     consume(token_iter, TokenKind::LeftParenthesis)?;
-//                     let expr = parse_expr(token_iter, 0)?;
-//                     consume(token_iter, TokenKind::RightParenthesis)?;
-//                     consume(token_iter, TokenKind::Semicolon)?;
-//                     Ok(Stmt::Print(expr))
-//                 }
-//                 Keyword::Const => {
-//                     let (ident, expr_opt) = parse_declaration(token_iter)?;
-//                     Ok(Stmt::Let(ident, expr_opt))
-//                 }
-//                 Keyword::Mut => {
-//                     let (ident, expr_opt) = parse_declaration(token_iter)?;
-//                     Ok(Stmt::Mut(ident, expr_opt))
-//                 }
-//                 Keyword::Let => {
-//                     let (ident, expr_opt) = parse_declaration(token_iter)?;
-//                     Ok(Stmt::Let(ident, expr_opt))
-//                 }
-//                 Keyword::For => {
-//                     let condition_expr = parse_expr(token_iter, 0)?;
-//                     consume(token_iter, TokenKind::LeftParenthesis)?;
-//                     let mut stmts = Vec::new();
-//                     while let Some(t) = token_iter.peek()
-//                         && !t.kind.eq(&TokenKind::RightParenthesis)
-//                     {
-//                         let stmt = parse_stmt(token_iter)?;
-//                         stmts.push(stmt);
-//                     }
-//                     consume(token_iter, TokenKind::RightParenthesis)?;
-//                     Ok(Stmt::For(condition_expr, stmts))
-//                 }
-//             },
-//             // id = ?;
-//             TokenKind::Identifier(id)
-//                 if token_iter
-//                     .peek()
-//                     .map(|t| t.kind == TokenKind::Operator(Operator::Equal))
-//                     .unwrap_or(false) =>
-//             {
-//                 consume(token_iter, TokenKind::Operator(Operator::Equal))?;
-//                 let expr = parse_expr(token_iter, 0)?;
-//                 consume(token_iter, TokenKind::Semicolon)?;
-//                 Ok(Stmt::Assignment(id, expr))
-//             }
-//             // id[?]
-//             TokenKind::Identifier(id)
-//                 if token_iter
-//                     .peek()
-//                     .map(|t| t.kind == TokenKind::LeftBracket)
-//                     .unwrap_or(false) =>
-//             {
-//                 consume(token_iter, TokenKind::LeftBracket)?;
-//                 let expr = parse_expr(token_iter, 0)?;
-//                 consume(token_iter, TokenKind::RightBracket)?;
-//                 Ok(Stmt::ArrayIndexing(id, expr))
-//             }
-//             TokenKind::Identifier(_)
-//             | TokenKind::Integer(_)
-//             | TokenKind::String(_)
-//             | TokenKind::Operator(_)
-//             | TokenKind::Colon
-//             | TokenKind::Semicolon
-//             | TokenKind::LeftParenthesis
-//             | TokenKind::RightParenthesis
-//             | TokenKind::LeftBracket
-//             | TokenKind::RightBracket
-//             | TokenKind::EOF => {
-//                 let expr = parse_expr(token_iter, 0)?;
-//                 consume(token_iter, TokenKind::Semicolon)?;
-//                 Ok(Stmt::Expr(expr))
-//             }
-//         }
-//     } else {
-//         // TODO: improve errors
-//         Err(CompilerError::Generic(
-//             "calling parse_stmt with empty iterator".to_owned(),
-//         ))
-//     }
-// }
+// --- SEMANTIC ---
+#[derive(Default)]
+pub struct SymbolTable {
+    /// Poor mans hashmap of [ var_name => temporary assigned to it ]
+    /// TODO(mhs): improve this, making it dumb so it is easy to self-host later
+    scope_stack: Vec<Vec<Symbol>>,
+}
 
-// fn parse_declaration(token_iter: &mut TokenIter) -> Result<(String, Option<Expr>), CompilerError> {
-//     let TokenKind::Identifier(id) = consume(token_iter, TokenKind::Identifier(String::new()))?.kind
-//     else {
-//         panic!("The token should be an identifier");
-//     };
-//     let mut expr_opt = None;
-//     if consume(token_iter, TokenKind::Colon).is_ok() {
-//         consume(token_iter, TokenKind::Operator(Operator::Equal))?;
-//         expr_opt = Some(parse_expr(token_iter, 0)?);
-//     };
-//     consume(token_iter, TokenKind::Semicolon)?;
-//     Ok((id, expr_opt))
-// }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Symbol {
+    name: String,
+    kind: SymbolKind,
+    typ: Type,
+}
 
-// fn parse_expr(token_iter: &mut TokenIter, bind_pow: u8) -> CompilerResult<Expr> {
-//     let Some(t) = token_iter.next() else {
-//         // TODO: improve errors
-//         return Err(CompilerError::Generic(
-//             "calling parse_expr with empty iterator".to_owned(),
-//         ));
-//     };
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SymbolKind {
+    Local { pos: u32 },
+    Parameter { pos: u32 },
+    Global,
+}
 
-//     let mut left = match t.kind {
-//         TokenKind::Operator(op) if let Some((_, right_bind_pow)) = prefix_bind_pow(&op) => {
-//             let expr = parse_expr(token_iter, right_bind_pow)?;
-//             Expr::Operation(op, vec![expr])
-//         }
-//         TokenKind::LeftParenthesis => {
-//             let expr = parse_expr(token_iter, 0)?;
-//             consume(token_iter, TokenKind::RightParenthesis)?;
-//             Expr::Parenthesis(Box::new(expr))
-//         }
-//         TokenKind::Integer(i) => Expr::Atom(Atom::Constant(Constant::Integer(i))),
-//         TokenKind::String(s) => Expr::Atom(Atom::String(s)),
-//         TokenKind::Identifier(id) => Expr::Atom(Atom::Identifier(id)),
-//         t => {
-//             panic!("wrong token {t}")
-//         }
-//     };
+impl SymbolTable {
+    pub fn scope_enter(&mut self) {
+        self.scope_stack.push(Vec::new());
+    }
 
-//     loop {
-//         let Some(t) = token_iter.peek() else {
-//             // TODO: improve errors
-//             return Err(CompilerError::Generic(
-//                 "calling parse_expr with empty iterator".to_owned(),
-//             ));
-//         };
+    pub fn scope_exit(&mut self) {
+        let _ = self.scope_stack.pop();
+    }
 
-//         let op = match &t.kind {
-//             TokenKind::Operator(op) => op,
-//             _ => break,
-//         };
+    pub fn scope_level(&self) -> usize {
+        self.scope_stack.len()
+    }
 
-//         // now that we know that the `op` is a correct operator, we call next and clone.
-//         let op = op.clone();
+    /// Declarations overwrite previous ones
+    pub fn scope_symbol_bind(&mut self, symbol: Symbol) {
+        if self.scope_stack.is_empty() {
+            self.scope_stack.push(Vec::new());
+        };
 
-//         if let Some((left_bind_pow, _)) = postfix_bind_pow(&op) {
-//             if left_bind_pow < bind_pow {
-//                 break;
-//             }
+        let curr_scope = &mut self.scope_stack[0];
 
-//             continue;
-//         }
-//         if let Some((left_bind_pow, right_bind_pow)) = infix_bind_pow(&op) {
-//             if (left_bind_pow < bind_pow) {
-//                 break;
-//             }
+        let name_to_find = &symbol.name;
+        for i in 0..curr_scope.len() {
+            if curr_scope[i].name.eq(name_to_find) {
+                curr_scope[i] = symbol;
+                return;
+            }
+        }
 
-//             token_iter.next();
-//             let right = parse_expr(token_iter, right_bind_pow)?;
-//             left = Expr::Operation(op, vec![left, right]);
-//             continue;
-//         }
+        curr_scope.push(symbol);
+    }
 
-//         break;
-//     }
+    pub fn scope_symbol_lookup(&self, name_to_find: &str) -> Option<Symbol> {
+        for i in (0..self.scope_stack.len()).rev() {
+            let curr_scope = &self.scope_stack[i];
 
-//     Ok(left)
-// }
+            for j in 0..curr_scope.len() {
+                if curr_scope[j].name.eq(name_to_find) {
+                    return Some(curr_scope[j].clone());
+                }
+            }
+        }
 
-// /// TODO(mhs): shamelessly stolen from odin-lang at (https://odin-lang.org/docs/overview/#operator-precedence)
-// /// and adapted to our needs with the following rule in mind
-// /// we use and odd number for the bare priority and bump it up by one for associativity
-// /// Bind Power      Operator
-// ///     15          unary operations
-// ///     13          *   /   %   %%   &   &~  <<   >>
-// ///     11          +   -   |   ~    in  not_in
-// ///      9          ==  !=  <   >    <=  >=
-// ///      7          &&
-// ///      5          ||
-// ///      3          ..=    ..<
-// ///      1          or_else  =  ?    if  when
+        None
+    }
 
-// // TODO: make a single function for the binding powers
-// fn postfix_bind_pow(op: &Operator) -> Option<(u8, ())> {
-//     None
-// }
+    /// This is used to determine whether a symbol has already been defined in the current scope
+    pub fn scope_symbol_lookup_current(&self, name_to_find: &str) -> Option<Symbol> {
+        if self.scope_stack.is_empty() {
+            return None;
+        };
+        let curr_scope = &self.scope_stack[0];
 
-// fn prefix_bind_pow(op: &Operator) -> Option<((), u8)> {
-//     let res = match op {
-//         Operator::Plus | Operator::Minus => ((), 15),
-//         Operator::Equal => return None,
-//         _ => panic!("bad prefix op: {op:?}"),
-//     };
+        for j in 0..curr_scope.len() {
+            if curr_scope[j].name.eq(name_to_find) {
+                return Some(curr_scope[j].clone());
+            }
+        }
 
-//     Some(res)
-// }
+        None
+    }
+}
 
-// fn infix_bind_pow(op: &Operator) -> Option<(u8, u8)> {
-//     let res = match op {
-//         Operator::Plus | Operator::Minus => (11, 12),
-//         Operator::Star | Operator::Slash => (13, 14),
-//         Operator::Greater | Operator::Lower => (9, 10),
-//         Operator::Equal => (1, 2), // TODO(mhs): is equal right associative?
-//         _ => panic!("bad prefix op: {op:?}"),
-//     };
-//     Some(res)
-// }
+// --- ---
 
 // --- PARSER ---
-
-pub struct AST {
+pub struct Ast {
     stmts: Vec<Stmt>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stmt {
     Decl {
         id: Token<Identifier>,
         typ: Token<Type>,
         val: Token<Value>,
+        // TODO(mhs): add function declarations
     },
     Print {
         vals: Vec<Token<Value>>,
@@ -410,22 +184,22 @@ impl std::fmt::Display for Stmt {
         }
     }
 }
+// --- ---
 
 // --- LEXER ---
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token<K> {
     pub kind: K,
     pub line: usize,
     pub col: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenKind {
     /// Identifiers must begin with a letter or an underscore. E.g.: i, x, mystr, fog123, _bigLongName55
     Keyword(Keyword),
     Type(Type),
-    Symbol(Symbol),
+    Operator(Operator),
     Value(Value),
     Eof,
 }
@@ -454,7 +228,7 @@ pub enum Type {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Symbol {
+pub enum Operator {
     Bang,
     BangEqual,
     BraceLeft,
@@ -522,33 +296,33 @@ impl std::fmt::Display for Token<TokenKind> {
                 Type::String => write!(fmt, "Keyword: String"),
                 Type::Void => write!(fmt, "Keyword: Void"),
             },
-            TokenKind::Symbol(sy) => match sy {
-                Symbol::Bang => write!(fmt, "Symbol \"!\""),
-                Symbol::BangEqual => write!(fmt, "Symbol \"!=\""),
-                Symbol::BraceLeft => write!(fmt, "Symbol \"{{\""),
-                Symbol::BraceRight => write!(fmt, "Symbol \"}}\""),
-                Symbol::BracketLeft => write!(fmt, "Symbol \"[\""),
-                Symbol::BracketRight => write!(fmt, "Symbol \"]\""),
-                Symbol::Caret => write!(fmt, "Symbol \"^\""),
-                Symbol::Colon => write!(fmt, "Symbol \":\""),
-                Symbol::Comma => write!(fmt, "Symbol \",\""),
-                Symbol::Equal => write!(fmt, "Symbol \"=\""),
-                Symbol::EqualEqual => write!(fmt, "Symbol \"==\""),
-                Symbol::Greater => write!(fmt, "Symbol \">\""),
-                Symbol::GreaterEqual => write!(fmt, "Symbol \">=\""),
-                Symbol::LogicAnd => write!(fmt, "Symbol \"&&\""),
-                Symbol::LogicOr => write!(fmt, "Symbol \"||\""),
-                Symbol::Lower => write!(fmt, "Symbol \"<\""),
-                Symbol::LowerEqual => write!(fmt, "Symbol \"<=\""),
-                Symbol::Minus => write!(fmt, "Symbol \"-\""),
-                Symbol::ParenthesisLeft => write!(fmt, "Symbol \"(\""),
-                Symbol::ParenthesisRight => write!(fmt, "Symbol \")\""),
-                Symbol::Percent => write!(fmt, "Symbol \"%\""),
-                Symbol::Plus => write!(fmt, "Symbol \"+\""),
-                Symbol::Point => write!(fmt, "Symbol \".\""),
-                Symbol::Semicolon => write!(fmt, "Symbol \";\""),
-                Symbol::Slash => write!(fmt, "Symbol \"/\""),
-                Symbol::Star => write!(fmt, "Symbol \"*\""),
+            TokenKind::Operator(sy) => match sy {
+                Operator::Bang => write!(fmt, "Symbol \"!\""),
+                Operator::BangEqual => write!(fmt, "Symbol \"!=\""),
+                Operator::BraceLeft => write!(fmt, "Symbol \"{{\""),
+                Operator::BraceRight => write!(fmt, "Symbol \"}}\""),
+                Operator::BracketLeft => write!(fmt, "Symbol \"[\""),
+                Operator::BracketRight => write!(fmt, "Symbol \"]\""),
+                Operator::Caret => write!(fmt, "Symbol \"^\""),
+                Operator::Colon => write!(fmt, "Symbol \":\""),
+                Operator::Comma => write!(fmt, "Symbol \",\""),
+                Operator::Equal => write!(fmt, "Symbol \"=\""),
+                Operator::EqualEqual => write!(fmt, "Symbol \"==\""),
+                Operator::Greater => write!(fmt, "Symbol \">\""),
+                Operator::GreaterEqual => write!(fmt, "Symbol \">=\""),
+                Operator::LogicAnd => write!(fmt, "Symbol \"&&\""),
+                Operator::LogicOr => write!(fmt, "Symbol \"||\""),
+                Operator::Lower => write!(fmt, "Symbol \"<\""),
+                Operator::LowerEqual => write!(fmt, "Symbol \"<=\""),
+                Operator::Minus => write!(fmt, "Symbol \"-\""),
+                Operator::ParenthesisLeft => write!(fmt, "Symbol \"(\""),
+                Operator::ParenthesisRight => write!(fmt, "Symbol \")\""),
+                Operator::Percent => write!(fmt, "Symbol \"%\""),
+                Operator::Plus => write!(fmt, "Symbol \"+\""),
+                Operator::Point => write!(fmt, "Symbol \".\""),
+                Operator::Semicolon => write!(fmt, "Symbol \";\""),
+                Operator::Slash => write!(fmt, "Symbol \"/\""),
+                Operator::Star => write!(fmt, "Symbol \"*\""),
             },
             TokenKind::Value(val) => match val {
                 Value::Constant(cons) => match cons {
@@ -563,3 +337,28 @@ impl std::fmt::Display for Token<TokenKind> {
         }
     }
 }
+// --- ---
+
+// --- PRINTERS ---
+fn print_ast(ast: &Ast) {
+    println!(
+        "AST --> {}",
+        ast.stmts
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+}
+
+fn print_tokens(tokens: &[Token<TokenKind>]) {
+    println!(
+        "Tokens --> {}",
+        tokens
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+}
+// --- ---

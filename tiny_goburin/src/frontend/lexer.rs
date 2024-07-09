@@ -28,41 +28,41 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 if idx < chars.len() && chars[idx].eq(&'=') {
                     idx += 1;
                     col += 1;
-                    TokenKind::Symbol(Symbol::BangEqual)
+                    TokenKind::Operator(Operator::BangEqual)
                 } else {
-                    TokenKind::Symbol(Symbol::Bang)
+                    TokenKind::Operator(Operator::Bang)
                 }
             }
-            '{' => TokenKind::Symbol(Symbol::BraceLeft),
-            '}' => TokenKind::Symbol(Symbol::BraceRight),
-            '[' => TokenKind::Symbol(Symbol::BracketLeft),
-            ']' => TokenKind::Symbol(Symbol::BracketRight),
-            '^' => TokenKind::Symbol(Symbol::Caret),
-            ':' => TokenKind::Symbol(Symbol::Colon),
-            ',' => TokenKind::Symbol(Symbol::Comma),
+            '{' => TokenKind::Operator(Operator::BraceLeft),
+            '}' => TokenKind::Operator(Operator::BraceRight),
+            '[' => TokenKind::Operator(Operator::BracketLeft),
+            ']' => TokenKind::Operator(Operator::BracketRight),
+            '^' => TokenKind::Operator(Operator::Caret),
+            ':' => TokenKind::Operator(Operator::Colon),
+            ',' => TokenKind::Operator(Operator::Comma),
             '=' => {
                 if idx < chars.len() && chars[idx].eq(&'=') {
                     idx += 1;
                     col += 1;
-                    TokenKind::Symbol(Symbol::EqualEqual)
+                    TokenKind::Operator(Operator::EqualEqual)
                 } else {
-                    TokenKind::Symbol(Symbol::Equal)
+                    TokenKind::Operator(Operator::Equal)
                 }
             }
             '>' => {
                 if idx < chars.len() && chars[idx].eq(&'=') {
                     idx += 1;
                     col += 1;
-                    TokenKind::Symbol(Symbol::GreaterEqual)
+                    TokenKind::Operator(Operator::GreaterEqual)
                 } else {
-                    TokenKind::Symbol(Symbol::Greater)
+                    TokenKind::Operator(Operator::Greater)
                 }
             }
             '&' => {
                 if idx < chars.len() && chars[idx].eq(&'&') {
                     idx += 1;
                     col += 1;
-                    TokenKind::Symbol(Symbol::LogicAnd)
+                    TokenKind::Operator(Operator::LogicAnd)
                 } else {
                     errors.push(format!("Logical And is written as `&&` but only one `&` was provided. {line}:{col}"));
                     continue;
@@ -72,7 +72,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 if idx < chars.len() && chars[idx].eq(&'|') {
                     idx += 1;
                     col += 1;
-                    TokenKind::Symbol(Symbol::LogicOr)
+                    TokenKind::Operator(Operator::LogicOr)
                 } else {
                     errors.push(format!(
                         "Logical Or is written as `||` but only one `|` was provided. {line}:{col}"
@@ -84,9 +84,9 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 if idx < chars.len() && chars[idx].eq(&'=') {
                     idx += 1;
                     col += 1;
-                    TokenKind::Symbol(Symbol::LowerEqual)
+                    TokenKind::Operator(Operator::LowerEqual)
                 } else {
-                    TokenKind::Symbol(Symbol::Lower)
+                    TokenKind::Operator(Operator::Lower)
                 }
             }
             '-' => {
@@ -96,15 +96,15 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     col += 1;
                     l_tokenize_kind_int(ch, true, &mut idx, &chars, &mut col)
                 } else {
-                    TokenKind::Symbol(Symbol::Minus)
+                    TokenKind::Operator(Operator::Minus)
                 }
             }
-            '(' => TokenKind::Symbol(Symbol::ParenthesisLeft),
-            ')' => TokenKind::Symbol(Symbol::ParenthesisRight),
-            '%' => TokenKind::Symbol(Symbol::Percent),
-            '+' => TokenKind::Symbol(Symbol::Plus),
-            '.' => TokenKind::Symbol(Symbol::Point),
-            ';' => TokenKind::Symbol(Symbol::Semicolon),
+            '(' => TokenKind::Operator(Operator::ParenthesisLeft),
+            ')' => TokenKind::Operator(Operator::ParenthesisRight),
+            '%' => TokenKind::Operator(Operator::Percent),
+            '+' => TokenKind::Operator(Operator::Plus),
+            '.' => TokenKind::Operator(Operator::Point),
+            ';' => TokenKind::Operator(Operator::Semicolon),
             '/' => {
                 if idx < chars.len() && chars[idx].eq(&'/') {
                     while idx < chars.len() && !chars[idx].eq(&'\n') {
@@ -114,10 +114,10 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     line += 1;
                     continue;
                 } else {
-                    TokenKind::Symbol(Symbol::Slash)
+                    TokenKind::Operator(Operator::Slash)
                 }
             }
-            '*' => TokenKind::Symbol(Symbol::Star),
+            '*' => TokenKind::Operator(Operator::Star),
             d if d.is_ascii_digit() => l_tokenize_kind_int(c, false, &mut idx, &chars, &mut col),
             '\'' => {
                 let is_escape_char = idx < chars.len() && chars[idx].eq(&'\\');
