@@ -5,42 +5,39 @@ pub(crate) fn frontend_pass(source: &str) -> Result<(), String> {
     let tokens = lexer::l_tokenize(source)?;
     print_tokens(&tokens);
 
-    let ast = parser::p_parse(tokens)?;
+    let mut ast = parser::p_parse(tokens)?;
     print_ast(&ast);
 
-    let _ = semantic_resolve(ast)?;
+    let _ = semantic_resolve(&mut ast)?;
+    println!();
+    print_ast(&ast);
 
     Ok(())
 }
 
-pub fn semantic_resolve(ast: Ast) -> Result<(), String> {
+pub fn semantic_resolve(ast: &mut Ast) -> Result<(), String> {
     let mut symbol_table = SymbolTable::default();
 
     // name resolution
     for i in 0..ast.stmts.len() {
-        resolve_stmt(&mut symbol_table, ast.stmts[i].clone());
+        resolve_stmt(&mut symbol_table, &mut ast.stmts[i]);
     }
 
     Ok(())
 }
 
-fn resolve_stmt(symbol_table: &mut SymbolTable, stmt: Stmt) {
+fn resolve_stmt(symbol_table: &mut SymbolTable, stmt: &mut Stmt) {
     match stmt {
-        Stmt::Decl { id, typ, val } => resolve_decl(symbol_table, id, typ, val),
+        Stmt::Decl(decl) => resolve_decl(symbol_table, decl),
         Stmt::Print { vals } => {
             for v in vals {
-                resolve_val(symbol_table, v);
+                resolve_val(symbol_table, v.clone());
             }
         }
     }
 }
 
-fn resolve_decl(
-    symbol_table: &mut SymbolTable,
-    id: Token<Identifier>,
-    typ: Token<Type>,
-    val: Token<Value>,
-) {
+fn resolve_decl(symbol_table: &mut SymbolTable, decl: &mut Decl) {
     let symbol_kind = if symbol_table.scope_level() > 1 {
         SymbolKind::Local { pos: 0 }
     } else {
@@ -48,12 +45,13 @@ fn resolve_decl(
     };
 
     let symbol = Symbol {
-        name: id.kind.0,
+        name: decl.id.kind.0.clone(),
         kind: symbol_kind,
-        typ: typ.kind,
+        typ: decl.typ.kind.clone(),
     };
+    decl.sym = Some(symbol.clone());
 
-    resolve_val(symbol_table, val);
+    resolve_val(symbol_table, decl.val.clone());
     symbol_table.scope_symbol_bind(symbol);
 }
 
@@ -164,23 +162,34 @@ pub struct Ast {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decl {
+    id: Token<Identifier>,
+    typ: Token<Type>,
+    val: Token<Value>,
+    sym: Option<Symbol>,
+    // TODO(mhs): add function declarations
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stmt {
-    Decl {
-        id: Token<Identifier>,
-        typ: Token<Type>,
-        val: Token<Value>,
-        // TODO(mhs): add function declarations
-    },
-    Print {
-        vals: Vec<Token<Value>>,
-    },
+    Decl(Decl),
+    Print { vals: Vec<Token<Value>> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Expr {
+    LiteralInt(i64),
+    LiteralString(String),
+    Arg,
 }
 
 impl std::fmt::Display for Stmt {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Stmt::Print { vals } => write!(fmt, "print {vals:?}"),
-            Stmt::Decl { id, typ, val } => write!(fmt, "{id:?} : {typ:?} = {val:?}"),
+            Stmt::Decl(Decl { id, typ, val, sym }) => {
+                write!(fmt, "{id:?} : {typ:?} = {val:?} |{sym:?}|")
+            }
         }
     }
 }

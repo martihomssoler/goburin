@@ -58,7 +58,7 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                     idx += 1;
                 }
 
-                let stmt_decl = Stmt::Decl {
+                let stmt_decl = Stmt::Decl(Decl {
                     id: Token {
                         kind: id.clone(),
                         line: token.line,
@@ -66,7 +66,8 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                     },
                     typ,
                     val,
-                };
+                    sym: None,
+                });
                 stmts.push(stmt_decl);
             }
             TokenKind::Keyword(kw) => match kw {
