@@ -39,7 +39,7 @@ fn typecheck_stmt(symbol_table: &SymbolTable, stmt: &Stmt, errors: &mut Vec<Stri
         Stmt::Decl(decl) => typecheck_decl(symbol_table, decl, errors),
         Stmt::Print(Print { vals }) => {
             for val in vals {
-                typecheck_val(symbol_table, &val, errors);
+                typecheck_val(symbol_table, val, errors);
             }
         }
     };

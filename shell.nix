@@ -19,8 +19,7 @@
       wayland
       libxkbcommon
       # - #
-      qbe
-      gcc
+      fasm
       stdenv.cc
       stdenv.cc.libc stdenv.cc.libc_dev
     ];
