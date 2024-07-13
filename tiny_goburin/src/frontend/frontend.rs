@@ -118,7 +118,7 @@ fn resolve_stmt(symbol_table: &mut SymbolTable, stmt: &mut Stmt, errors: &mut Ve
         Stmt::Decl(decl) => resolve_decl(symbol_table, decl, errors),
         Stmt::Print(Print { vals }) => {
             for v in vals {
-                resolve_val(symbol_table, v.clone(), errors);
+                resolve_val(symbol_table, v, errors);
             }
         }
     }
@@ -138,21 +138,22 @@ fn resolve_decl(symbol_table: &mut SymbolTable, decl: &mut Decl, errors: &mut Ve
     };
     decl.sym = Some(symbol.clone());
 
-    resolve_val(symbol_table, decl.val.clone(), errors);
+    resolve_val(symbol_table, &mut decl.val, errors);
     symbol_table.scope_symbol_bind(symbol);
 }
 
-fn resolve_val(symbol_table: &SymbolTable, v: Token<Value>, errors: &mut Vec<String>) {
-    match v.kind {
+fn resolve_val(symbol_table: &SymbolTable, v: &mut Token<Value>, errors: &mut Vec<String>) {
+    match &v.kind {
         Value::Constant(_) => (),
-        Value::Identifier(id) => {
-            if symbol_table.scope_symbol_lookup(&id.0).is_none() {
+        Value::Identifier(id) => match symbol_table.scope_symbol_lookup(&id.0) {
+            Some(s) => v.sym = Some(s),
+            None => {
                 errors.push(format!(
                     "[ERROR]: Use of undeclared variable {} in {}:{}",
                     id.0, v.line, v.col
                 ));
             }
-        }
+        },
     }
 }
 // --- ---
@@ -295,6 +296,7 @@ pub struct Token<K> {
     pub kind: K,
     pub line: usize,
     pub col: usize,
+    pub sym: Option<Symbol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

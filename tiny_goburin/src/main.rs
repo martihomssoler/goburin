@@ -25,10 +25,11 @@ fn main() -> Result<(), String> {
 }
 
 pub fn compile_file(file_path: &PathBuf) -> Result<(), String> {
-    let source = std::fs::read_to_string(file_path).unwrap();
+    let file_path = std::fs::canonicalize(file_path).map_err(|e| e.to_string())?;
+    let source = std::fs::read_to_string(&file_path).unwrap();
     let ast = frontend::frontend_pass(&source)?;
     let ir = middleend::middleend_pass(ast)?;
-    backend::backend_pass(file_path, ir)
+    backend::backend_pass(&file_path, ir)
 }
 
 #[path = "backend/backend.rs"]
@@ -40,8 +41,9 @@ mod middleend;
 
 #[cfg(test)]
 pub mod tests {
+    use core::panic;
     use std::{
-        io::{Stdout, Write},
+        io::{Read, Stdout, Write},
         path::PathBuf,
         process::{Command, ExitStatus, Stdio},
     };
@@ -66,40 +68,33 @@ pub mod tests {
                     return Err(std::io::Error::last_os_error());
                 };
 
-                println!("[[COMPILING]] => '{:}.gobo'", filename);
+                println!("[[ COMPILING ]] => '{:}.gobo'", filename);
                 let res = compile_file(&test_path);
                 assert_eq!(Ok(()), res);
 
-                println!("--> [ Executing '{:}' ]", filename);
-                let stdout_path = test_path.with_extension("stdout");
-                let stdout_file = std::fs::File::create(stdout_path.clone()).unwrap();
-
-                let command_output = Command::new(format!("./{filename}"))
-                    // .stdout(stdout_file)
-                    .stdout(Stdio::piped())
+                print!("--> [ Executing '{:}' ]", filename);
+                let mut command_output = Command::new(format!("./{filename}"))
                     .current_dir(tests_dir.clone())
                     .output()?;
-                println!("==== {command_output:?}");
-
-                let stdout_file = std::fs::File::open(stdout_path.clone()).unwrap();
-                let command_status = Command::new(format!("./{filename}"))
-                    .stdout(stdout_file)
-                    .current_dir(tests_dir.clone())
-                    .spawn()?
-                    .wait()?;
-
+                if !command_output.status.success() {
+                    let command_error = std::str::from_utf8(&command_output.stderr)
+                        .expect("Output should be UTF-8")
+                        .to_string();
+                    println!("--> [ EXECUTING ERROR ] {command_error:?}");
+                }
                 assert_eq!(
-                    command_status,
+                    command_output.status,
                     <ExitStatus as std::default::Default>::default()
                 );
+                println!(" ... OK");
 
-                println!(
-                    "--> [ Comparing execution of '{filename}' with '{filename}.output' file ]",
-                );
-                let actual_output_content = std::fs::read_to_string(stdout_path)?;
-                // assert_eq!(actual_output_content, expected_output_content);
+                print!("--> [ Comparing execution with '{filename}.output' ]",);
+                let actual_output_content =
+                    std::str::from_utf8(&command_output.stdout).expect("Output should be UTF-8");
+                assert_eq!(actual_output_content, expected_output_content);
+                println!(" ... OK");
 
-                println!("--> [ Removing files '{:}' ]", filename);
+                print!("--> [ Removing files '{:}' ]", filename);
                 let output = Command::new("rm")
                     .arg(filename)
                     .arg(format!("{filename}.asm"))
@@ -109,6 +104,7 @@ pub mod tests {
                     .unwrap()
                     .code();
                 assert_eq!(output, Some(0));
+                println!(" ... OK");
 
                 println!();
             }

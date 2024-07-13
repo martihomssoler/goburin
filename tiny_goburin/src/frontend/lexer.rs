@@ -178,7 +178,12 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
             }
         };
 
-        let token = Token { kind, line, col };
+        let token = Token {
+            kind,
+            line,
+            col,
+            sym: None,
+        };
         tokens.push(token);
     }
 
@@ -190,6 +195,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
         kind: TokenKind::Eof,
         line,
         col,
+        sym: None,
     };
     tokens.push(token);
 

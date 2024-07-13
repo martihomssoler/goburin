@@ -28,6 +28,7 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                         kind: decl_typ.clone(),
                         line: tokens[idx].line,
                         col: tokens[idx].col,
+                        sym: None,
                     };
                     idx += 1;
                     typ
@@ -49,6 +50,7 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                         kind: decl_val.clone(),
                         line: tokens[idx].line,
                         col: tokens[idx].col,
+                        sym: None,
                     };
                     idx += 1;
                     val
@@ -63,6 +65,7 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                         kind: id.clone(),
                         line: token.line,
                         col: token.col,
+                        sym: None,
                     },
                     typ,
                     val,
@@ -97,6 +100,7 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                                 kind: decl_val.clone(),
                                 line: tokens[idx].line,
                                 col: tokens[idx].col,
+                                sym: None,
                             };
                             values.push(val);
                             next_is_comma = true;

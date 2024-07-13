@@ -1,8 +1,16 @@
 /// For now we use FASM as our assembly target language
-use crate::frontend::Ast;
-use std::{fmt::Write, fs::File, path::Path, process::Command};
+use crate::{
+    frontend::{self, Ast, Identifier, Stmt},
+    middleend::Ir,
+};
+use std::{
+    fmt::Write,
+    fs::File,
+    path::Path,
+    process::{Command, Stdio},
+};
 
-pub fn backend_pass(file_path: &Path, ir: Ast) -> Result<(), String> {
+pub fn backend_pass(file_path: &Path, ir: Ir) -> Result<(), String> {
     let be = X86_64::default();
     let code = be.codegen(ir)?;
     code_fasm_compile(file_path, code)?;
@@ -20,32 +28,36 @@ fn code_fasm_compile(file_path: &Path, code: String) -> Result<(), String> {
     let file_dir = asm_file.parent().unwrap().to_str().unwrap().to_string();
 
     // fasm file.asm
-    Command::new("fasm")
+    let output_fasm = Command::new("fasm")
         .arg(asm_file)
         .current_dir(file_dir.clone())
-        .spawn()
-        .map_err(|err| err.to_string())?
-        .wait()
+        .output()
         .map_err(|err| err.to_string())?;
+    if !output_fasm.status.success() {
+        let fasm_error = std::str::from_utf8(&output_fasm.stderr).expect("Output should be UTF-8");
+        return Err(fasm_error.to_string());
+    }
 
-    // ld file.o -dynamic-linker -lc
-    Command::new("ld")
+    // ld file.o -lc
+    let output_ld = Command::new("ld")
         .arg("-o")
         .arg(exec_file)
         .arg(obj_file)
         .arg("-lc")
         .current_dir(file_dir)
-        .spawn()
-        .map_err(|err| err.to_string())?
-        .wait()
+        .output()
         .map_err(|err| err.to_string())?;
+    if !output_ld.status.success() {
+        let fasm_error = std::str::from_utf8(&output_ld.stderr).expect("Output should be UTF-8");
+        return Err(fasm_error.to_string());
+    }
 
     Ok(())
 }
 
 // --- TARGET ---
 pub trait Target {
-    fn codegen(self, ir: Ast) -> Result<String, String>;
+    fn codegen(self, ir: Ir) -> Result<String, String>;
 
     fn scratch_alloc(&mut self) -> u32;
     fn scratch_free(&mut self, r: u32);
@@ -66,7 +78,7 @@ impl X86_64 {
 }
 
 impl Target for X86_64 {
-    fn codegen(self, ir: Ast) -> Result<String, String> {
+    fn codegen(self, mut ir: Ir) -> Result<String, String> {
         let mut errors: Vec<String> = Vec::new();
         let mut code = String::new();
 
@@ -83,20 +95,80 @@ impl Target for X86_64 {
         writeln!(code);
         // declare external functions
         writeln!(code, r#"extrn printf"#);
-        writeln!(code, r#"extrn _exit"#);
+        writeln!(code, r#"extrn exit"#);
         writeln!(code);
         // code starts
         writeln!(code, r#"_start:"#);
-        writeln!(code, r#"mov rdi, msg"#);
-        writeln!(code, r#"call printf"#);
+
+        for stmt in ir.instructions() {
+            match stmt {
+                Stmt::Decl(decl) => {
+                    let frontend::Decl { id, val, .. } = decl;
+
+                    match val.kind {
+                        frontend::Value::Constant(c) => match c {
+                            frontend::Constant::Int(i) => {
+                                let Identifier(id) = id.kind;
+                                ir.var_insert(&id, &format!("{i}"));
+                            }
+                            frontend::Constant::Bool(b) => todo!(),
+                            frontend::Constant::Char(c) => {
+                                format!("{c:?}");
+                            }
+                            frontend::Constant::String(s) => {
+                                let str_label = format!("str_{}", ir.strs.len());
+                                ir.str_insert(&s, &str_label);
+                            }
+                        },
+                        frontend::Value::Identifier(id) => todo!(),
+                    }
+                }
+                Stmt::Print(print) => {
+                    let frontend::Print { vals } = print;
+                    for val in vals {
+                        match val.kind {
+                            frontend::Value::Constant(c) => match c {
+                                frontend::Constant::Int(i) => todo!(),
+                                frontend::Constant::Bool(b) => todo!(),
+                                frontend::Constant::Char(c) => todo!(),
+                                frontend::Constant::String(s) => {
+                                    let str_label = format!("str_{}", ir.strs.len());
+                                    ir.str_insert(&s, &str_label);
+
+                                    writeln!(code, r#"mov rdi, fmt_string"#);
+                                    writeln!(code, r#"mov rsi, {}"#, str_label);
+                                    writeln!(code, r#"call printf"#);
+                                }
+                            },
+                            frontend::Value::Identifier(id) => {
+                                let Some(s) = ir.var_get(&id.0) else {
+                                    panic!("Symbol should be resolved by now");
+                                };
+
+                                writeln!(code, r#"mov rdi, fmt_int"#);
+                                writeln!(code, r#"mov rsi, {s}"#);
+                                writeln!(code, r#"call printf"#);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         writeln!(code, r#"mov rdi, 0"#);
-        writeln!(code, r#"call _exit"#);
+        writeln!(code, r#"call exit"#);
         writeln!(code);
 
         // data section
         writeln!(code, r#"section '.data' writeable"#);
         writeln!(code);
-        writeln!(code, r#"msg: db "Hello, World", 10, 0"#);
+        writeln!(code, r#"fmt_int: db "%d", 0"#);
+        writeln!(code, r#"fmt_char: db "%c", 0"#);
+        writeln!(code, r#"fmt_string: db "%s", 0"#);
+
+        for (str_content, str_label) in ir.strs {
+            let str_content = str_content.replace('\n', "\", 10, \"");
+            writeln!(code, r#"{str_label}: db "{str_content}", 0"#);
+        }
 
         if !errors.is_empty() {
             return Err(errors.join("\n"));

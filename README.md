@@ -86,3 +86,6 @@ pub main : () = (
 )
 ```
 
+## Bug Fixes Links
+
+[Do NOT use _exit!!!](https://stackoverflow.com/questions/38379553/using-printf-in-assembly-leads-to-empty-output-when-piping-but-works-on-the-ter)
