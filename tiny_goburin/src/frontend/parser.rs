@@ -2,7 +2,7 @@ use super::*;
 
 pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
     let mut errors: Vec<String> = Vec::new();
-    let mut stmts = Vec::new();
+    let mut declarations = Vec::new();
     let mut idx = 0;
 
     while idx < tokens.len() {
@@ -11,71 +11,48 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
 
         match &token.kind {
             TokenKind::Value(Value::Identifier(id)) => {
-                // assignment or declaration
+                // name : type = value;
+                let name = id.0.clone();
 
-                // declaration form
-                // identifier : type = value;
-                {
-                    consume(true, &tokens[idx], TokenKind::Operator(Operator::Colon))?;
-                    idx += 1;
-                }
-                let typ = {
-                    consume(false, &tokens[idx], TokenKind::Type(Type::Void))?;
-                    let TokenKind::Type(ref decl_typ) = tokens[idx].kind else {
-                        unreachable!()
-                    };
-                    let typ = Token {
-                        kind: decl_typ.clone(),
-                        line: tokens[idx].line,
-                        col: tokens[idx].col,
-                        sym: None,
-                    };
-                    idx += 1;
-                    typ
-                };
-                {
-                    consume(true, &tokens[idx], TokenKind::Operator(Operator::Equal))?;
-                    idx += 1;
-                }
-                let val = {
-                    consume(
-                        false,
-                        &tokens[idx],
-                        TokenKind::Value(Value::Constant(Constant::Bool(false))),
-                    )?;
-                    let TokenKind::Value(ref decl_val) = tokens[idx].kind else {
-                        unreachable!()
-                    };
-                    let val = Token {
-                        kind: decl_val.clone(),
-                        line: tokens[idx].line,
-                        col: tokens[idx].col,
-                        sym: None,
-                    };
-                    idx += 1;
-                    val
-                };
-                {
-                    consume(true, &tokens[idx], TokenKind::Operator(Operator::Semicolon))?;
-                    idx += 1;
-                }
+                // colon
+                consume(
+                    true,
+                    &tokens[idx],
+                    &mut idx,
+                    TokenKind::Operator(Operator::Colon),
+                )?;
+                // type
+                let typ = consume_type(&tokens, &mut idx)?;
+                // equal
+                consume(
+                    true,
+                    &tokens[idx],
+                    &mut idx,
+                    TokenKind::Operator(Operator::Equal),
+                )?;
+                // value
+                let val = consume_value(&tokens, &mut idx)?;
+                // semicolon
+                consume(
+                    true,
+                    &tokens[idx],
+                    &mut idx,
+                    TokenKind::Operator(Operator::Semicolon),
+                )?;
 
-                let stmt_decl = Stmt::Decl(Decl {
-                    id: Token {
-                        kind: id.clone(),
-                        line: token.line,
-                        col: token.col,
-                        sym: None,
-                    },
-                    typ,
-                    val,
-                    sym: None,
-                });
-                stmts.push(stmt_decl);
+                let node = AstNode::from_token_value(&val);
+                let declaration = Declaration {
+                    name,
+                    typ: typ.kind,
+                    val: from_token_value_to_expression(val),
+                };
+
+                declarations.push(declaration);
             }
             TokenKind::Keyword(kw) => match kw {
                 Keyword::Print => {
-                    let mut values = Vec::new();
+                    // print a, b, c, ..., d;
+                    let mut exprs = Vec::new();
                     let mut next_is_comma = false;
 
                     while idx < tokens.len()
@@ -85,36 +62,41 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                         )
                     {
                         if next_is_comma {
-                            consume(true, &tokens[idx], TokenKind::Operator(Operator::Comma))?;
+                            consume(
+                                true,
+                                &tokens[idx],
+                                &mut idx,
+                                TokenKind::Operator(Operator::Comma),
+                            )?;
                             next_is_comma = false;
                         } else {
-                            consume(
-                                false,
-                                &tokens[idx],
-                                TokenKind::Value(Value::Constant(Constant::Bool(false))),
-                            )?;
-                            let TokenKind::Value(ref decl_val) = tokens[idx].kind else {
-                                unreachable!()
-                            };
-                            let val = Token {
-                                kind: decl_val.clone(),
-                                line: tokens[idx].line,
-                                col: tokens[idx].col,
-                                sym: None,
-                            };
-                            values.push(val);
+                            let val = consume_value(&tokens, &mut idx)?;
+                            exprs.push(from_token_value_to_expression(val));
                             next_is_comma = true;
                         }
-
-                        idx += 1;
                     }
-                    {
-                        consume(true, &tokens[idx], TokenKind::Operator(Operator::Semicolon))?;
-                        idx += 1;
-                    }
+                    // semicolon
+                    consume(
+                        true,
+                        &tokens[idx],
+                        &mut idx,
+                        TokenKind::Operator(Operator::Semicolon),
+                    )?;
+                    idx += 1;
 
-                    let stmt_print = Stmt::Print(Print { vals: values });
-                    stmts.push(stmt_print);
+                    let node = AstNode::from_token(token);
+                    let declaration = Declaration {
+                        name: "Print".to_string(),
+                        typ: Type::Void,
+                        val: Expression {
+                            name: "Integer".to_string(),
+                            kind: ExpressionKind::PrintCall(PrintCall { exprs }),
+                            left: None,
+                            right: None,
+                            node,
+                        },
+                    };
+                    declarations.push(declaration);
                 }
                 _ => {
                     unimplemented!("Keyword {kw:?} not supported yet!")
@@ -136,17 +118,91 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
     }
 
     Ok(Ast {
-        stmts,
+        declarations,
         symbol_table: SymbolTable::default(),
     })
 }
 
-fn consume(strict: bool, actual: &Token<TokenKind>, expected: TokenKind) -> Result<(), String> {
+fn from_token_value_to_expression(val: Token<Value>) -> Expression {
+    let node = AstNode::from_token_value(&val);
+    match val.kind {
+        Value::Constant(c) => match c {
+            Constant::Int(i) => Expression {
+                name: "Integer".to_string(),
+                kind: ExpressionKind::LiteralInteger(i),
+                left: None,
+                right: None,
+                node,
+            },
+            Constant::Bool(_) => todo!(),
+            Constant::Char(_) => todo!(),
+            Constant::String(s) => Expression {
+                name: "String".to_string(),
+                kind: ExpressionKind::LiteralString(s),
+                left: None,
+                right: None,
+                node,
+            },
+        },
+        Value::Identifier(id) => Expression {
+            name: "Identifier".to_string(),
+            kind: ExpressionKind::Identifier(id.0),
+            left: None,
+            right: None,
+            node,
+        },
+    }
+}
+
+fn consume_value(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Value>, String> {
+    let prev_idx = *idx;
+    consume(
+        false,
+        &tokens[prev_idx],
+        idx,
+        TokenKind::Value(Value::Constant(Constant::Bool(false))),
+    )?;
+    let TokenKind::Value(ref decl_val) = tokens[prev_idx].kind else {
+        unreachable!()
+    };
+    let val = Token {
+        kind: decl_val.clone(),
+        line: tokens[prev_idx].line,
+        col: tokens[prev_idx].col,
+        sym: None,
+    };
+
+    Ok(val)
+}
+
+fn consume_type(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Type>, String> {
+    let prev_idx = *idx;
+    consume(false, &tokens[prev_idx], idx, TokenKind::Type(Type::Void))?;
+    let TokenKind::Type(ref decl_typ) = tokens[prev_idx].kind else {
+        unreachable!()
+    };
+    let typ = Token {
+        kind: decl_typ.clone(),
+        line: tokens[prev_idx].line,
+        col: tokens[prev_idx].col,
+        sym: None,
+    };
+
+    Ok(typ)
+}
+
+fn consume(
+    strict: bool,
+    actual: &Token<TokenKind>,
+    idx: &mut usize,
+    expected: TokenKind,
+) -> Result<(), String> {
     let is_match = if strict {
         actual.kind.eq(&expected)
     } else {
         std::mem::discriminant(&actual.kind) == std::mem::discriminant(&expected)
     };
+    *idx += 1;
 
     if is_match {
         Ok(())

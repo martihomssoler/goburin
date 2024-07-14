@@ -1,7 +1,7 @@
 /// For now we use FASM as our assembly target language
 use crate::{
-    frontend::{self, Ast, Identifier, Stmt},
-    middleend::Ir,
+    frontend::{self, Ast, Expression, Identifier},
+    middleend::{Ir, IrState},
 };
 use std::{
     fmt::Write,
@@ -100,60 +100,8 @@ impl Target for X86_64 {
         // code starts
         writeln!(code, r#"_start:"#);
 
-        for stmt in ir.instructions() {
-            match stmt {
-                Stmt::Decl(decl) => {
-                    let frontend::Decl { id, val, .. } = decl;
+        codegen_decl(&mut ir, &mut code);
 
-                    match val.kind {
-                        frontend::Value::Constant(c) => match c {
-                            frontend::Constant::Int(i) => {
-                                let Identifier(id) = id.kind;
-                                ir.var_insert(&id, &format!("{i}"));
-                            }
-                            frontend::Constant::Bool(b) => todo!(),
-                            frontend::Constant::Char(c) => {
-                                format!("{c:?}");
-                            }
-                            frontend::Constant::String(s) => {
-                                let str_label = format!("str_{}", ir.strs.len());
-                                ir.str_insert(&s, &str_label);
-                            }
-                        },
-                        frontend::Value::Identifier(id) => todo!(),
-                    }
-                }
-                Stmt::Print(print) => {
-                    let frontend::Print { vals } = print;
-                    for val in vals {
-                        match val.kind {
-                            frontend::Value::Constant(c) => match c {
-                                frontend::Constant::Int(i) => todo!(),
-                                frontend::Constant::Bool(b) => todo!(),
-                                frontend::Constant::Char(c) => todo!(),
-                                frontend::Constant::String(s) => {
-                                    let str_label = format!("str_{}", ir.strs.len());
-                                    ir.str_insert(&s, &str_label);
-
-                                    writeln!(code, r#"mov rdi, fmt_string"#);
-                                    writeln!(code, r#"mov rsi, {}"#, str_label);
-                                    writeln!(code, r#"call printf"#);
-                                }
-                            },
-                            frontend::Value::Identifier(id) => {
-                                let Some(s) = ir.var_get(&id.0) else {
-                                    panic!("Symbol should be resolved by now");
-                                };
-
-                                writeln!(code, r#"mov rdi, fmt_int"#);
-                                writeln!(code, r#"mov rsi, {s}"#);
-                                writeln!(code, r#"call printf"#);
-                            }
-                        }
-                    }
-                }
-            }
-        }
         writeln!(code, r#"mov rdi, 0"#);
         writeln!(code, r#"call exit"#);
         writeln!(code);
@@ -165,7 +113,7 @@ impl Target for X86_64 {
         writeln!(code, r#"fmt_char: db "%c", 0"#);
         writeln!(code, r#"fmt_string: db "%s", 0"#);
 
-        for (str_content, str_label) in ir.strs {
+        for (str_content, str_label) in ir.state.strs {
             let str_content = str_content.replace('\n', "\", 10, \"");
             writeln!(code, r#"{str_label}: db "{str_content}", 0"#);
         }
@@ -207,6 +155,57 @@ impl Target for X86_64 {
 
     fn label_name(&self, _l: u32) -> String {
         todo!()
+    }
+}
+
+fn codegen_decl(ir: &mut Ir, code: &mut String) {
+    for decl in &mut ir.decls {
+        codegen_expr(&mut ir.state, &mut decl.val, code);
+    }
+}
+
+fn codegen_expr(state: &mut IrState, expr: &mut Expression, code: &mut String) {
+    match &mut expr.kind {
+        frontend::ExpressionKind::LiteralInteger(i) => {
+            state.var_insert(&expr.node.symbol.clone().unwrap().name, &format!("{i}"));
+        }
+        frontend::ExpressionKind::LiteralString(s) => {
+            let str_label = format!("str_{}", state.strs.len());
+            state.str_insert(s, &str_label);
+        }
+        frontend::ExpressionKind::Identifier(_) => todo!(),
+        frontend::ExpressionKind::PrintCall(print) => codegen_printcall(state, print, code),
+    }
+}
+
+fn codegen_printcall(state: &mut IrState, print: &mut frontend::PrintCall, code: &mut String) {
+    for expr in &print.exprs {
+        match &expr.kind {
+            frontend::ExpressionKind::LiteralInteger(i) => {
+                state.var_insert(&expr.name, &format!("{i}"));
+            }
+            frontend::ExpressionKind::LiteralString(s) => {
+                let str_label = format!("str_{}", state.strs.len());
+                state.str_insert(s, &str_label);
+
+                writeln!(code, r#"mov rdi, fmt_string"#);
+                writeln!(code, r#"mov rsi, {}"#, str_label);
+                writeln!(code, r#"call printf"#);
+            }
+            frontend::ExpressionKind::Identifier(id) => {
+                let Some(s) = state.var_get(id) else {
+                    println!("[ERROR]");
+                    println!("VARS:\n{:?}", state.vars);
+                    println!("STRS:\n{:?}", state.strs);
+                    panic!("Symbol {id:?} should be resolved by now");
+                };
+
+                writeln!(code, r#"mov rdi, fmt_int"#);
+                writeln!(code, r#"mov rsi, {s}"#);
+                writeln!(code, r#"call printf"#);
+            }
+            frontend::ExpressionKind::PrintCall(_) => todo!(),
+        }
     }
 }
 // --- ---

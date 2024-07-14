@@ -1,25 +1,31 @@
 use std::collections::HashMap;
 
-use crate::frontend::{Ast, Stmt, SymbolTable};
+use crate::frontend::{Ast, Declaration, SymbolTable};
 
 pub fn middleend_pass(ast: Ast) -> Result<Ir, String> {
     let ir = Ir {
-        stmts: ast.stmts,
-        symbol_table: ast.symbol_table,
-        vars: Vec::new(),
-        strs: Vec::new(),
+        decls: ast.declarations,
+        state: IrState {
+            symbol_table: ast.symbol_table,
+            vars: Vec::new(),
+            strs: Vec::new(),
+        },
     };
     Ok(ir)
 }
 
 pub struct Ir {
-    pub stmts: Vec<Stmt>,
+    pub decls: Vec<Declaration>,
+    pub state: IrState,
+}
+
+pub struct IrState {
     pub symbol_table: SymbolTable,
     pub vars: Vec<(String, String)>,
     pub strs: Vec<(String, String)>,
 }
 
-impl Ir {
+impl IrState {
     pub fn var_insert(&mut self, name: &str, val: &str) {
         self.vars.push((name.to_owned(), val.to_owned()));
     }
@@ -50,9 +56,5 @@ impl Ir {
         }
 
         None
-    }
-
-    pub fn instructions(&self) -> Vec<Stmt> {
-        self.stmts.clone()
     }
 }

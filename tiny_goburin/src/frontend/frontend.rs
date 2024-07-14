@@ -2,161 +2,15 @@ use std::ops::Deref;
 
 mod lexer;
 mod parser;
+mod semantic;
 
 pub(crate) fn frontend_pass(source: &str) -> Result<Ast, String> {
-    let tokens = lexer::l_tokenize(source)?;
-    // print_tokens(&tokens);
-
-    let mut ast = parser::p_parse(tokens)?;
-    // print_ast(&ast);
-
-    semantic_resolve(&mut ast)?;
-    // print_ast(&ast);
-
-    typecheck(&ast)?;
+    let tokens = lexer::l_tokenize(source)?; // print_tokens(&tokens);
+    let ast = parser::p_parse(tokens)?; // print_ast(&ast);
+    let ast = semantic::check(ast)?; // print_ast(&ast);
 
     Ok(ast)
 }
-
-// --- STATIC TYPE CHECKING ---
-fn typecheck(ast: &Ast) -> Result<(), String> {
-    let mut errors: Vec<String> = Vec::new();
-    let symbol_table = &ast.symbol_table;
-
-    for i in 0..ast.stmts.len() {
-        typecheck_stmt(symbol_table, &ast.stmts[i], &mut errors);
-    }
-
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
-    }
-
-    Ok(())
-}
-
-fn typecheck_stmt(symbol_table: &SymbolTable, stmt: &Stmt, errors: &mut Vec<String>) {
-    match stmt {
-        Stmt::Decl(decl) => typecheck_decl(symbol_table, decl, errors),
-        Stmt::Print(Print { vals }) => {
-            for val in vals {
-                typecheck_val(symbol_table, val, errors);
-            }
-        }
-    };
-}
-
-fn typecheck_decl(symbol_table: &SymbolTable, decl: &Decl, errors: &mut Vec<String>) {
-    let t_val = typecheck_val(symbol_table, &decl.val, errors);
-    if !type_equals(&t_val, &decl.typ.kind) {
-        errors.push(format!(
-            "[TypeError]: Expected type '{:?}' but got '{:?}' for variable '{}' in {}:{}",
-            decl.typ.kind, t_val, decl.id.kind.0, decl.val.line, decl.val.col,
-        ));
-    }
-}
-
-fn typecheck_val(symbol_table: &SymbolTable, val: &Token<Value>, errors: &mut Vec<String>) -> Type {
-    match &val.kind {
-        Value::Constant(c) => match c {
-            Constant::Int(_) => Type::Int,
-            Constant::Bool(_) => Type::Bool,
-            Constant::Char(_) => Type::Char,
-            Constant::String(_) => Type::String,
-        },
-        Value::Identifier(id) => {
-            if let Some(symbol) = symbol_table.scope_symbol_lookup(&id.0) {
-                symbol.typ
-            } else {
-                errors.push(format!(
-                    "Undeclared variable '{}' in {}:{}",
-                    id.0, val.line, val.col
-                ));
-                Type::Untyped
-            }
-        }
-    }
-}
-
-fn type_equals(a: &Type, b: &Type) -> bool {
-    if a == b {
-        if matches!(a, Type::Untyped) {
-            false
-        } else if matches!(a, Type::Array(_)) {
-            false
-        } else if matches!(a, Type::Function(_, _)) {
-            false
-        } else {
-            true
-        }
-    } else {
-        false
-    }
-}
-// --- ---
-
-// --- NAME RESOLUTION ---
-pub fn semantic_resolve(ast: &mut Ast) -> Result<(), String> {
-    let mut errors: Vec<String> = Vec::new();
-    let mut symbol_table = SymbolTable::default();
-
-    // name resolution
-    for i in 0..ast.stmts.len() {
-        resolve_stmt(&mut symbol_table, &mut ast.stmts[i], &mut errors);
-    }
-
-    ast.symbol_table = symbol_table;
-
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
-    }
-
-    Ok(())
-}
-
-fn resolve_stmt(symbol_table: &mut SymbolTable, stmt: &mut Stmt, errors: &mut Vec<String>) {
-    match stmt {
-        Stmt::Decl(decl) => resolve_decl(symbol_table, decl, errors),
-        Stmt::Print(Print { vals }) => {
-            for v in vals {
-                resolve_val(symbol_table, v, errors);
-            }
-        }
-    }
-}
-
-fn resolve_decl(symbol_table: &mut SymbolTable, decl: &mut Decl, errors: &mut Vec<String>) {
-    let symbol_kind = if symbol_table.scope_level() > 1 {
-        SymbolKind::Local { pos: 0 }
-    } else {
-        SymbolKind::Global
-    };
-
-    let symbol = Symbol {
-        name: decl.id.kind.0.clone(),
-        kind: symbol_kind,
-        typ: decl.typ.kind.clone(),
-    };
-    decl.sym = Some(symbol.clone());
-
-    resolve_val(symbol_table, &mut decl.val, errors);
-    symbol_table.scope_symbol_bind(symbol);
-}
-
-fn resolve_val(symbol_table: &SymbolTable, v: &mut Token<Value>, errors: &mut Vec<String>) {
-    match &v.kind {
-        Value::Constant(_) => (),
-        Value::Identifier(id) => match symbol_table.scope_symbol_lookup(&id.0) {
-            Some(s) => v.sym = Some(s),
-            None => {
-                errors.push(format!(
-                    "[ERROR]: Use of undeclared variable {} in {}:{}",
-                    id.0, v.line, v.col
-                ));
-            }
-        },
-    }
-}
-// --- ---
 
 // --- SEMANTIC ---
 #[derive(Default)]
@@ -247,23 +101,67 @@ impl SymbolTable {
 
 // --- PARSER ---
 pub struct Ast {
-    pub stmts: Vec<Stmt>,
+    pub declarations: Vec<Declaration>,
     pub symbol_table: SymbolTable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Stmt {
-    Decl(Decl),
-    Print(Print),
+pub struct AstNode {
+    pub token: Token<TokenKind>,
+    pub symbol: Option<Symbol>,
+    pub reg: u32,
+}
+impl AstNode {
+    fn from_token_value(val: &Token<Value>) -> AstNode {
+        AstNode {
+            token: Token {
+                kind: TokenKind::Value(val.kind.clone()),
+                line: val.line,
+                col: val.col,
+                sym: None, // FIXME(mhs): remove the symbol in here
+            },
+            symbol: None,
+            reg: u32::MAX,
+        }
+    }
+
+    fn from_token(token: &Token<TokenKind>) -> AstNode {
+        AstNode {
+            token: token.clone(),
+            symbol: None,
+            reg: u32::MAX,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Decl {
-    pub id: Token<Identifier>,
-    pub typ: Token<Type>,
-    pub val: Token<Value>,
-    pub sym: Option<Symbol>,
-    // TODO(mhs): add function declarations
+pub struct Declaration {
+    pub name: String,
+    pub typ: Type,
+    pub val: Expression,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Expression {
+    pub name: String,
+    pub kind: ExpressionKind,
+    pub node: AstNode,
+    pub left: Option<Box<Expression>>,
+    pub right: Option<Box<Expression>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExpressionKind {
+    LiteralInteger(i64),
+    LiteralString(String),
+    Identifier(String),
+    // TODO(mhs): remove this, it is just for testing purposes, print should be a proper function call
+    PrintCall(PrintCall),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrintCall {
+    pub exprs: Vec<Expression>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,21 +169,25 @@ pub struct Print {
     pub vals: Vec<Token<Value>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Expr {
-    LiteralInt(i64),
-    LiteralString(String),
-    Arg,
+// --- ---
+
+impl std::fmt::Display for Declaration {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.val.kind {
+            ExpressionKind::LiteralInteger(i) => write!(fmt, "LiteralInteger"),
+            ExpressionKind::LiteralString(s) => write!(fmt, "LiteralString"),
+            ExpressionKind::Identifier(id) => write!(fmt, "Identifier"),
+            ExpressionKind::PrintCall(p) => write!(fmt, "PrintCall"),
+        }
+    }
 }
 
-impl std::fmt::Display for Stmt {
+impl std::fmt::Display for Ast {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Stmt::Print(Print { vals }) => write!(fmt, "print {vals:?}"),
-            Stmt::Decl(Decl { id, typ, val, sym }) => {
-                write!(fmt, "{id:?} : {typ:?} = {val:?} |{sym:?}|")
-            }
+        for decl in &self.declarations {
+            write!(fmt, "{decl}")?;
         }
+        Ok(())
     }
 }
 // --- ---
@@ -457,12 +359,12 @@ impl std::fmt::Display for Token<TokenKind> {
 // --- PRINTERS ---
 fn print_ast(ast: &Ast) {
     println!(
-        "AST --> {}",
-        ast.stmts
+        "[AST]\n{}\n",
+        ast.declarations
             .iter()
-            .map(|t| t.to_string())
+            .map(|t| format!("  ->  {t:?}"))
             .collect::<Vec<String>>()
-            .join(", ")
+            .join("\n")
     );
 }
 
