@@ -160,7 +160,9 @@ impl Target for X86_64 {
 
 fn codegen_decl(ir: &mut Ir, code: &mut String) {
     for decl in &mut ir.decls {
-        codegen_expr(&mut ir.state, &mut decl.val, code);
+        if let Some(expr) = &mut decl.val {
+            codegen_expr(&mut ir.state, expr, code);
+        }
     }
 }
 

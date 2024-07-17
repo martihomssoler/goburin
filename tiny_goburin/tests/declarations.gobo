@@ -1,0 +1,4 @@
+i: Int;
+b: Bool;
+s: String = "hello";
+f: Function (x: Int, y: Int) -> Int = { return x + y; }

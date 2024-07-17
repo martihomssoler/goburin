@@ -34,11 +34,14 @@ fn typecheck(ast: &Ast) -> Result<(), String> {
 // }
 
 fn typecheck_decl(symbol_table: &SymbolTable, decl: &Declaration, errors: &mut Vec<String>) {
-    let t_val = typecheck_expr(symbol_table, &decl.val, errors);
+    let Some(expr) = &decl.val else {
+        return;
+    };
+    let t_val = typecheck_expr(symbol_table, expr, errors);
     if !type_equals(&t_val, &decl.typ) {
         errors.push(format!(
             "[TypeError]: Expected type '{:?}' but got '{:?}' for variable '{}' in {}:{}",
-            decl.typ, t_val, decl.name, decl.val.node.token.line, decl.val.node.token.col,
+            decl.typ, t_val, decl.name, expr.node.token.line, expr.node.token.col,
         ));
     }
 }
@@ -109,9 +112,12 @@ fn resolve_decl(symbol_table: &mut SymbolTable, decl: &mut Declaration, errors: 
         kind,
         typ: decl.typ.clone(),
     };
-    decl.val.node.symbol = Some(symbol.clone());
 
-    resolve_expr(symbol_table, &mut decl.val, errors);
+    let Some(expr) = &mut decl.val else {
+        return;
+    };
+    expr.node.symbol = Some(symbol.clone());
+    resolve_expr(symbol_table, expr, errors);
     symbol_table.scope_symbol_bind(symbol);
 }
 

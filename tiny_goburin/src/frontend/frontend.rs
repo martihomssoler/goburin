@@ -8,7 +8,7 @@ pub(crate) fn frontend_pass(source: &str) -> Result<Ast, String> {
     let tokens = lexer::l_tokenize(source)?; // print_tokens(&tokens);
     let ast = parser::p_parse(tokens)?; // print_ast(&ast);
     let ast = semantic::check(ast)?; // print_ast(&ast);
-
+    print_ast(&ast);
     Ok(ast)
 }
 
@@ -106,39 +106,10 @@ pub struct Ast {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AstNode {
-    pub token: Token<TokenKind>,
-    pub symbol: Option<Symbol>,
-    pub reg: u32,
-}
-impl AstNode {
-    fn from_token_value(val: &Token<Value>) -> AstNode {
-        AstNode {
-            token: Token {
-                kind: TokenKind::Value(val.kind.clone()),
-                line: val.line,
-                col: val.col,
-                sym: None, // FIXME(mhs): remove the symbol in here
-            },
-            symbol: None,
-            reg: u32::MAX,
-        }
-    }
-
-    fn from_token(token: &Token<TokenKind>) -> AstNode {
-        AstNode {
-            token: token.clone(),
-            symbol: None,
-            reg: u32::MAX,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Declaration {
     pub name: String,
     pub typ: Type,
-    pub val: Expression,
+    pub val: Option<Expression>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,14 +141,46 @@ pub struct Print {
 }
 
 // --- ---
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AstNode {
+    pub token: Token<TokenKind>,
+    pub symbol: Option<Symbol>,
+    pub reg: u32,
+}
+impl AstNode {
+    fn from_token_value(val: &Token<Value>) -> AstNode {
+        AstNode {
+            token: Token {
+                kind: TokenKind::Value(val.kind.clone()),
+                line: val.line,
+                col: val.col,
+                sym: None, // FIXME(mhs): remove the symbol in here
+            },
+            symbol: None,
+            reg: u32::MAX,
+        }
+    }
+
+    fn from_token(token: &Token<TokenKind>) -> AstNode {
+        AstNode {
+            token: token.clone(),
+            symbol: None,
+            reg: u32::MAX,
+        }
+    }
+}
 
 impl std::fmt::Display for Declaration {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.val.kind {
-            ExpressionKind::LiteralInteger(i) => write!(fmt, "LiteralInteger"),
-            ExpressionKind::LiteralString(s) => write!(fmt, "LiteralString"),
-            ExpressionKind::Identifier(id) => write!(fmt, "Identifier"),
-            ExpressionKind::PrintCall(p) => write!(fmt, "PrintCall"),
+        if let Some(expr) = &self.val {
+            match &expr.kind {
+                ExpressionKind::LiteralInteger(i) => write!(fmt, "LiteralInteger"),
+                ExpressionKind::LiteralString(s) => write!(fmt, "LiteralString"),
+                ExpressionKind::Identifier(id) => write!(fmt, "Identifier"),
+                ExpressionKind::PrintCall(p) => write!(fmt, "PrintCall"),
+            }
+        } else {
+            write!(fmt, "None")
         }
     }
 }
@@ -216,7 +219,6 @@ pub enum Keyword {
     Else,
     False,
     For,
-    Function,
     If,
     Print,
     Return,
@@ -230,14 +232,16 @@ pub enum Type {
     Array(Box<Type>),
     Bool,
     Char,
+    Function(Vec<(Identifier, Type)>, Box<Type>),
     Int,
     String,
+    Tuple(Box<Type>, Option<Box<Type>>),
     Void,
-    Function(Box<Type>, Box<Type>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operator {
+    Arrow,
     Bang,
     BangEqual,
     BraceLeft,
@@ -291,7 +295,6 @@ impl std::fmt::Display for Token<TokenKind> {
                 Keyword::Else => write!(fmt, "Keyword: Else"),
                 Keyword::False => write!(fmt, "Keyword: False"),
                 Keyword::For => write!(fmt, "Keyword: For"),
-                Keyword::Function => write!(fmt, "Keyword: Function"),
                 Keyword::If => write!(fmt, "Keyword: If"),
                 Keyword::Print => write!(fmt, "Keyword: Print"),
                 Keyword::Return => write!(fmt, "Keyword: Return"),
@@ -299,21 +302,22 @@ impl std::fmt::Display for Token<TokenKind> {
                 Keyword::While => write!(fmt, "Keyword: While"),
             },
             TokenKind::Type(typ) => match typ {
-                Type::Array(t) => write!(fmt, "Keyword: Array of {:?}", t.as_ref()),
-                Type::Bool => write!(fmt, "Keyword: Bool"),
-                Type::Char => write!(fmt, "Keyword: Char"),
-                Type::Int => write!(fmt, "Keyword: Int"),
-                Type::String => write!(fmt, "Keyword: String"),
-                Type::Void => write!(fmt, "Keyword: Void"),
-                Type::Function(a, r) => write!(
-                    fmt,
-                    "Keyword: Function ({:?}) -> ({:?})",
-                    a.as_ref(),
-                    r.as_ref()
-                ),
+                Type::Array(t) => write!(fmt, "Type: Array of {:?}", t.as_ref()),
+                Type::Bool => write!(fmt, "Type: Bool"),
+                Type::Char => write!(fmt, "Type: Char"),
+                Type::Int => write!(fmt, "Type: Int"),
+                Type::String => write!(fmt, "Type: String"),
+                Type::Void => write!(fmt, "Type: Void"),
+                Type::Function(a, r) => {
+                    write!(fmt, "Type: Function ({:?}) -> ({:?})", a, r.as_ref())
+                }
+                Type::Tuple(f, s) => {
+                    write!(fmt, "Type: Tuple ({:?}, {:?})", f.as_ref(), s.as_ref())
+                }
                 Type::Untyped => write!(fmt, "Untyped"),
             },
             TokenKind::Operator(sy) => match sy {
+                Operator::Arrow => write!(fmt, "Symbol \"->\""),
                 Operator::Bang => write!(fmt, "Symbol \"!\""),
                 Operator::BangEqual => write!(fmt, "Symbol \"!=\""),
                 Operator::BraceLeft => write!(fmt, "Symbol \"{{\""),

@@ -90,7 +90,11 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 }
             }
             '-' => {
-                if idx < chars.len() && chars[idx].is_ascii_digit() {
+                if idx < chars.len() && chars[idx].eq(&'>') {
+                    idx += 1;
+                    col += 1;
+                    TokenKind::Operator(Operator::Arrow)
+                } else if idx < chars.len() && chars[idx].is_ascii_digit() {
                     let ch = chars[idx];
                     idx += 1;
                     col += 1;
@@ -154,19 +158,19 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     "else" => TokenKind::Keyword(Keyword::Else),
                     "false" => TokenKind::Keyword(Keyword::False),
                     "for" => TokenKind::Keyword(Keyword::For),
-                    "function" => TokenKind::Keyword(Keyword::Function),
                     "if" => TokenKind::Keyword(Keyword::If),
                     "print" => TokenKind::Keyword(Keyword::Print),
                     "return" => TokenKind::Keyword(Keyword::Return),
                     "true" => TokenKind::Keyword(Keyword::True),
                     "while" => TokenKind::Keyword(Keyword::While),
                     // Types
-                    "array" => TokenKind::Type(Type::Array(Box::new(Type::Void))),
-                    "bool" => TokenKind::Type(Type::Bool),
-                    "char" => TokenKind::Type(Type::Char),
-                    "int" => TokenKind::Type(Type::Int),
-                    "string" => TokenKind::Type(Type::String),
-                    "void" => TokenKind::Type(Type::Void),
+                    "Array" => TokenKind::Type(Type::Array(Box::new(Type::Void))),
+                    "Bool" => TokenKind::Type(Type::Bool),
+                    "Char" => TokenKind::Type(Type::Char),
+                    "Function" => TokenKind::Type(Type::Function(Vec::new(), Box::new(Type::Void))),
+                    "Int" => TokenKind::Type(Type::Int),
+                    "String" => TokenKind::Type(Type::String),
+                    "Void" => TokenKind::Type(Type::Void),
                     _ => TokenKind::Value(Value::Identifier(Identifier(id))),
                 }
             }

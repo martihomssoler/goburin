@@ -1,3 +1,5 @@
+use std::os::unix::fs::FileTypeExt;
+
 use super::*;
 
 pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
@@ -23,6 +25,24 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                 )?;
                 // type
                 let typ = consume_type(&tokens, &mut idx)?;
+                if consume(
+                    true,
+                    &tokens[idx],
+                    &mut idx,
+                    TokenKind::Operator(Operator::Semicolon),
+                )
+                .is_ok()
+                {
+                    // empty declaration
+                    let declaration = Declaration {
+                        name,
+                        typ: typ.kind,
+                        val: None,
+                    };
+                    declarations.push(declaration);
+                    continue;
+                }
+
                 // equal
                 consume(
                     true,
@@ -44,9 +64,8 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                 let declaration = Declaration {
                     name,
                     typ: typ.kind,
-                    val: from_token_value_to_expression(val),
+                    val: Some(from_token_value_to_expression(val)),
                 };
-
                 declarations.push(declaration);
             }
             TokenKind::Keyword(kw) => match kw {
@@ -88,13 +107,13 @@ pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
                     let declaration = Declaration {
                         name: "Print".to_string(),
                         typ: Type::Void,
-                        val: Expression {
+                        val: Some(Expression {
                             name: "Integer".to_string(),
                             kind: ExpressionKind::PrintCall(PrintCall { exprs }),
                             left: None,
                             right: None,
                             node,
-                        },
+                        }),
                     };
                     declarations.push(declaration);
                 }
@@ -177,6 +196,15 @@ fn consume_value(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<V
 
 fn consume_type(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Type>, String> {
     let prev_idx = *idx;
+    // check for recursive/multi types
+    // TODO(mhs): add the rest of recursive/multi types
+    if let TokenKind::Type(Type::Function(_, _)) = &tokens[prev_idx].kind {
+        println!("idx: {idx}");
+        *idx += 1;
+        return consume_type_function(tokens, idx);
+        // FIXME(mhs): pending to parse function body
+    }
+
     consume(false, &tokens[prev_idx], idx, TokenKind::Type(Type::Void))?;
     let TokenKind::Type(ref decl_typ) = tokens[prev_idx].kind else {
         unreachable!()
@@ -191,6 +219,133 @@ fn consume_type(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Ty
     Ok(typ)
 }
 
+fn consume_type_function(
+    tokens: &[Token<TokenKind>],
+    idx: &mut usize,
+) -> Result<Token<Type>, String> {
+    let prev_idx = *idx;
+    // open parenthesis
+    consume(
+        true,
+        &tokens[*idx],
+        idx,
+        TokenKind::Operator(Operator::ParenthesisLeft),
+    )?;
+
+    // -- start parsing arguments
+    // format => arg_name : arg_type , ..
+    let mut arg_names = Vec::new();
+    let mut arg_types = Vec::new();
+    // TODO(mhs): most simple way to have 4 states, once we are self-hosted I should improve this mess
+    let mut next_is_argname = true;
+    let mut next_is_colon = false;
+    let mut next_is_type = false;
+    let mut next_is_comma = false;
+    while *idx < tokens.len()
+        && !matches!(
+            tokens[*idx].kind,
+            TokenKind::Operator(Operator::ParenthesisRight) | TokenKind::Eof
+        )
+    {
+        if next_is_argname {
+            // TODO(mhs): keep the Token<_> struct for better error messages
+            let name = consume_identifier(tokens, idx)?.kind;
+            arg_names.push(name);
+            next_is_argname = false;
+            next_is_colon = true;
+            continue;
+        }
+        if next_is_colon {
+            consume(
+                true,
+                &tokens[*idx],
+                idx,
+                TokenKind::Operator(Operator::Colon),
+            )?;
+            next_is_colon = false;
+            next_is_type = true;
+            continue;
+        }
+        if next_is_type {
+            // TODO(mhs): keep the Token<_> struct for better error messages
+            let typ = consume_type(tokens, idx)?.kind;
+            arg_types.push(typ);
+            next_is_type = false;
+            next_is_comma = true;
+            continue;
+        }
+        if next_is_comma {
+            consume(
+                true,
+                &tokens[*idx],
+                idx,
+                TokenKind::Operator(Operator::Comma),
+            )?;
+            next_is_comma = false;
+            next_is_argname = true;
+            continue;
+        }
+    }
+
+    if arg_names.len() != arg_types.len() {
+        return Err("Non-matching number of Argument Identifiers and Types.".to_owned());
+    }
+
+    consume(
+        true,
+        &tokens[*idx],
+        idx,
+        TokenKind::Operator(Operator::ParenthesisRight),
+    )?;
+    // function params done now function arrow
+    consume(
+        true,
+        &tokens[*idx],
+        idx,
+        TokenKind::Operator(Operator::Arrow),
+    )?;
+    // consume return type
+    // TODO(mhs): for now we only accept single types as return values
+    let return_typ = consume_type(tokens, idx)?.kind;
+    let mut args = Vec::new();
+    for i in 0..arg_names.len() {
+        args.push((arg_names[i].clone(), arg_types[i].clone()));
+    }
+
+    let func_typ = Token {
+        kind: Type::Function(args, Box::new(return_typ)),
+        line: tokens[prev_idx].line,
+        col: tokens[prev_idx].col,
+        sym: None,
+    };
+
+    Ok(func_typ)
+}
+
+fn consume_identifier(
+    tokens: &[Token<TokenKind>],
+    idx: &mut usize,
+) -> Result<Token<Identifier>, String> {
+    let prev_idx = *idx;
+    consume(
+        false,
+        &tokens[prev_idx],
+        idx,
+        TokenKind::Value(Value::Identifier(Identifier("None".to_owned()))),
+    )?;
+    let TokenKind::Value(Value::Identifier(ref id)) = tokens[prev_idx].kind else {
+        unreachable!()
+    };
+    let val = Token {
+        kind: id.clone(),
+        line: tokens[prev_idx].line,
+        col: tokens[prev_idx].col,
+        sym: None,
+    };
+
+    Ok(val)
+}
+
 fn consume(
     strict: bool,
     actual: &Token<TokenKind>,
@@ -202,9 +357,9 @@ fn consume(
     } else {
         std::mem::discriminant(&actual.kind) == std::mem::discriminant(&expected)
     };
-    *idx += 1;
 
     if is_match {
+        *idx += 1;
         Ok(())
     } else {
         Err(format!(

@@ -1,2 +1,2 @@
-temp : int = 28;
+temp : Int = 28;
 print "The temperature is: ", temp, " degrees\n";
