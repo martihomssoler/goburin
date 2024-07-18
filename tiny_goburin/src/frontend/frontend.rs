@@ -7,8 +7,8 @@ mod semantic;
 pub(crate) fn frontend_pass(source: &str) -> Result<Ast, String> {
     let tokens = lexer::l_tokenize(source)?; // print_tokens(&tokens);
     let ast = parser::p_parse(tokens)?; // print_ast(&ast);
-    let ast = semantic::check(ast)?; // print_ast(&ast);
-    print_ast(&ast);
+    let ast = semantic::s_check(ast)?; // print_ast(&ast);
+                                       // print_ast(&ast);
     Ok(ast)
 }
 
@@ -101,15 +101,43 @@ impl SymbolTable {
 
 // --- PARSER ---
 pub struct Ast {
-    pub declarations: Vec<Declaration>,
+    pub program: Vec<Definition>,
     pub symbol_table: SymbolTable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Definition {
+    pub id: Identifier,
+    pub typ: Type,
+    pub val: DefinitionValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DefinitionValue {
+    FunctionBody(Vec<Statement>),
+}
+// --- ---
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Statement {
+    Declaration(Declaration),
+    Expression(Expression),
+    Print(Vec<Expression>),
+    Return(Expression),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Declaration {
     pub name: String,
     pub typ: Type,
-    pub val: Option<Expression>,
+    pub val: DeclarationValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeclarationValue {
+    Uninitialized,
+    Expression(Expression),
+    FunctionBody(Vec<Statement>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,18 +154,6 @@ pub enum ExpressionKind {
     LiteralInteger(i64),
     LiteralString(String),
     Identifier(String),
-    // TODO(mhs): remove this, it is just for testing purposes, print should be a proper function call
-    PrintCall(PrintCall),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrintCall {
-    pub exprs: Vec<Expression>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Print {
-    pub vals: Vec<Token<Value>>,
 }
 
 // --- ---
@@ -147,6 +163,7 @@ pub struct AstNode {
     pub symbol: Option<Symbol>,
     pub reg: u32,
 }
+
 impl AstNode {
     fn from_token_value(val: &Token<Value>) -> AstNode {
         AstNode {
@@ -170,27 +187,63 @@ impl AstNode {
     }
 }
 
+impl std::fmt::Display for Ast {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for def in &self.program {
+            write!(fmt, "{def:?}")?;
+        }
+        Ok(())
+    }
+}
+
 impl std::fmt::Display for Declaration {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(expr) = &self.val {
-            match &expr.kind {
-                ExpressionKind::LiteralInteger(i) => write!(fmt, "LiteralInteger"),
-                ExpressionKind::LiteralString(s) => write!(fmt, "LiteralString"),
-                ExpressionKind::Identifier(id) => write!(fmt, "Identifier"),
-                ExpressionKind::PrintCall(p) => write!(fmt, "PrintCall"),
-            }
-        } else {
-            write!(fmt, "None")
+        match &self.val {
+            DeclarationValue::Uninitialized => write!(fmt, "Uninitialized "),
+            DeclarationValue::Expression(e) => write!(fmt, "Expression {e:?}"),
+            DeclarationValue::FunctionBody(s) => write!(fmt, "Statements {s:?}"),
         }
     }
 }
 
-impl std::fmt::Display for Ast {
+impl std::fmt::Display for Expression {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for decl in &self.declarations {
-            write!(fmt, "{decl}")?;
-        }
-        Ok(())
+        let Expression {
+            name,
+            kind,
+            node,
+            left,
+            right,
+        } = self;
+
+        let kind_str = match kind {
+            ExpressionKind::LiteralInteger(i) => format!("{i}"),
+            ExpressionKind::LiteralString(s) => format!("\"{s}\""),
+            ExpressionKind::Identifier(id) => format!("\"{id}\""),
+        };
+        let l = if let Some(l) = left {
+            l.as_ref().to_string()
+        } else {
+            "()".to_string()
+        };
+        let r = if let Some(r) = right {
+            r.as_ref().to_string()
+        } else {
+            "()".to_string()
+        };
+
+        write!(
+            fmt,
+            "[EXPR: name:{name:?}, value:{kind_str}, node:{node},\n\tleft:{},\n\tright:{},\n]",
+            l, r
+        )
+    }
+}
+
+impl std::fmt::Display for AstNode {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let AstNode { token, symbol, reg } = self;
+        write!(fmt, "({}:{})", token.line, token.col)
     }
 }
 // --- ---
@@ -212,6 +265,11 @@ pub enum TokenKind {
     Operator(Operator),
     Value(Value),
     Eof,
+}
+impl TokenKind {
+    fn constant() -> TokenKind {
+        TokenKind::Value(Value::Constant(Constant::Bool(false)))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -364,7 +422,7 @@ impl std::fmt::Display for Token<TokenKind> {
 fn print_ast(ast: &Ast) {
     println!(
         "[AST]\n{}\n",
-        ast.declarations
+        ast.program
             .iter()
             .map(|t| format!("  ->  {t:?}"))
             .collect::<Vec<String>>()
@@ -375,11 +433,7 @@ fn print_ast(ast: &Ast) {
 fn print_tokens(tokens: &[Token<TokenKind>]) {
     println!(
         "Tokens --> {}",
-        tokens
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<Vec<String>>()
-            .join(", ")
+        tokens.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", ")
     );
 }
 // --- ---

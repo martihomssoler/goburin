@@ -4,141 +4,211 @@ use super::*;
 
 pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
     let mut errors: Vec<String> = Vec::new();
-    let mut declarations = Vec::new();
-    let mut idx = 0;
 
-    while idx < tokens.len() {
-        let token = &tokens[idx];
-        idx += 1;
-
-        match &token.kind {
-            TokenKind::Value(Value::Identifier(id)) => {
-                // name : type = value;
-                let name = id.0.clone();
-
-                // colon
-                consume(
-                    true,
-                    &tokens[idx],
-                    &mut idx,
-                    TokenKind::Operator(Operator::Colon),
-                )?;
-                // type
-                let typ = consume_type(&tokens, &mut idx)?;
-                if consume(
-                    true,
-                    &tokens[idx],
-                    &mut idx,
-                    TokenKind::Operator(Operator::Semicolon),
-                )
-                .is_ok()
-                {
-                    // empty declaration
-                    let declaration = Declaration {
-                        name,
-                        typ: typ.kind,
-                        val: None,
-                    };
-                    declarations.push(declaration);
-                    continue;
-                }
-
-                // equal
-                consume(
-                    true,
-                    &tokens[idx],
-                    &mut idx,
-                    TokenKind::Operator(Operator::Equal),
-                )?;
-                // value
-                let val = consume_value(&tokens, &mut idx)?;
-                // semicolon
-                consume(
-                    true,
-                    &tokens[idx],
-                    &mut idx,
-                    TokenKind::Operator(Operator::Semicolon),
-                )?;
-
-                let node = AstNode::from_token_value(&val);
-                let declaration = Declaration {
-                    name,
-                    typ: typ.kind,
-                    val: Some(from_token_value_to_expression(val)),
-                };
-                declarations.push(declaration);
-            }
-            TokenKind::Keyword(kw) => match kw {
-                Keyword::Print => {
-                    // print a, b, c, ..., d;
-                    let mut exprs = Vec::new();
-                    let mut next_is_comma = false;
-
-                    while idx < tokens.len()
-                        && !matches!(
-                            tokens[idx].kind,
-                            TokenKind::Operator(Operator::Semicolon) | TokenKind::Eof
-                        )
-                    {
-                        if next_is_comma {
-                            consume(
-                                true,
-                                &tokens[idx],
-                                &mut idx,
-                                TokenKind::Operator(Operator::Comma),
-                            )?;
-                            next_is_comma = false;
-                        } else {
-                            let val = consume_value(&tokens, &mut idx)?;
-                            exprs.push(from_token_value_to_expression(val));
-                            next_is_comma = true;
-                        }
-                    }
-                    // semicolon
-                    consume(
-                        true,
-                        &tokens[idx],
-                        &mut idx,
-                        TokenKind::Operator(Operator::Semicolon),
-                    )?;
-                    idx += 1;
-
-                    let node = AstNode::from_token(token);
-                    let declaration = Declaration {
-                        name: "Print".to_string(),
-                        typ: Type::Void,
-                        val: Some(Expression {
-                            name: "Integer".to_string(),
-                            kind: ExpressionKind::PrintCall(PrintCall { exprs }),
-                            left: None,
-                            right: None,
-                            node,
-                        }),
-                    };
-                    declarations.push(declaration);
-                }
-                _ => {
-                    unimplemented!("Keyword {kw:?} not supported yet!")
-                }
-            },
-            TokenKind::Type(_) | TokenKind::Operator(_) | TokenKind::Value(_) => {
-                errors.push(format!(
-                    "Unexpected token {:?} at line {} and col {}",
-                    token.kind, token.line, token.col
-                ));
-                continue;
-            }
-            TokenKind::Eof => break,
-        }
-    }
+    let program = parse_program(&tokens, &mut errors)?;
 
     if !errors.is_empty() {
         return Err(errors.join("\n"));
     }
 
     Ok(Ast {
-        declarations,
+        program,
         symbol_table: SymbolTable::default(),
+    })
+}
+
+fn parse_program(tokens: &[Token<TokenKind>], errors: &mut Vec<String>) -> Result<Vec<Definition>, String> {
+    let mut definitions = Vec::new();
+    let mut idx = 0;
+    while idx < tokens.len() {
+        let token = &tokens[idx];
+        idx += 1;
+
+        match &token.kind {
+            TokenKind::Value(Value::Identifier(id)) => {
+                let definition = match parse_definition(id, tokens, &mut idx) {
+                    Ok(d) => d,
+                    Err(err) => {
+                        errors.push(err);
+                        continue;
+                    }
+                };
+                definitions.push(definition);
+            }
+            TokenKind::Eof => break,
+            _ => {
+                errors.push(format!(
+                    "[parse_program] Unexpected token {:?} at line {} and col {}",
+                    token.kind, token.line, token.col
+                ));
+                continue;
+            }
+        }
+    }
+    Ok(definitions)
+}
+
+fn parse_definition(id: &Identifier, tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Definition, String> {
+    // double colon
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Colon))?;
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Colon))?;
+    // type
+    let typ = consume_type(tokens, idx)?.kind;
+    // equal
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Equal))?;
+    // value
+    // NOTE(mhs): for now we only support function bodies
+    let val = parse_definition_value(tokens, idx)?;
+    Ok(Definition {
+        id: id.clone(),
+        typ,
+        val,
+    })
+}
+
+fn parse_definition_value(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<DefinitionValue, String> {
+    let mut statements = Vec::new();
+    // open braces
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceLeft))?;
+    // parse statements
+    while *idx < tokens.len()
+        && !matches!(
+            tokens[*idx].kind,
+            TokenKind::Operator(Operator::BraceRight) | TokenKind::Eof
+        )
+    {
+        let statement = parse_statement(tokens, idx)?;
+        statements.push(statement);
+    }
+    // NOTE(mhs): do not allow empty function bodies
+    if statements.is_empty() {
+        return Err("Empty function body.".to_owned());
+    }
+    // close braces
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceRight))?;
+    Ok(DefinitionValue::FunctionBody(statements))
+}
+
+fn parse_statement(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Statement, String> {
+    let token_kind = &tokens[*idx].kind;
+    *idx += 1;
+    let stmt = match token_kind {
+        TokenKind::Keyword(kw) => match &kw {
+            Keyword::Print => parse_statement_print(tokens, idx)?,
+            Keyword::Return => {
+                let stmt = Statement::Return(parse_expression(tokens, idx)?);
+                consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+                stmt
+            }
+            _ => todo!(),
+        },
+        TokenKind::Value(v) => match v {
+            Value::Constant(c) => {
+                let stmt = Statement::Return(parse_expression(tokens, idx)?);
+                consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+                stmt
+            }
+            Value::Identifier(id) => Statement::Declaration(parse_declaration(id.0.clone(), tokens, idx)?),
+        },
+        TokenKind::Eof => return Err("Encountered EOF while parsing a statement.".to_owned()),
+        _ => return Err(format!("[parser_statement] Unexpected token {token_kind:?}.")),
+    };
+
+    Ok(stmt)
+}
+
+fn parse_statement_print(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Statement, String> {
+    let mut exprs = Vec::new();
+    let mut next_is_comma = false;
+    while *idx < tokens.len()
+        && !matches!(
+            tokens[*idx].kind,
+            TokenKind::Operator(Operator::Semicolon) | TokenKind::Eof
+        )
+    {
+        if next_is_comma {
+            consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Comma))?;
+            next_is_comma = false;
+        } else {
+            exprs.push(parse_expression(tokens, idx)?);
+            next_is_comma = true;
+        }
+    }
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+    Ok(Statement::Print(exprs))
+}
+
+fn parse_expression(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Expression, String> {
+    let val = consume_value(tokens, idx)?;
+    Ok(from_token_value_to_expression(val))
+}
+
+// TokenKind::Keyword(kw) => match kw {
+//     Keyword::Return => {
+//         todo!()
+//     }
+//     Keyword::Print => {
+//     }
+//     _ => {
+//         unimplemented!("Keyword {kw:?} not supported yet!")
+//     }
+// },
+// TokenKind::Type(_) | TokenKind::Operator(_) | TokenKind::Value(_) => {
+//     errors.push(format!(
+//         "Unexpected token {:?} at line {} and col {}",
+//         token.kind, token.line, token.col
+//     ));
+//     continue;
+// }
+/// name : type = value;
+fn parse_declaration(name: String, tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Declaration, String> {
+    // colon
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Colon))?;
+    // type
+    let typ = consume_type(tokens, idx)?;
+    if consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon)).is_ok() {
+        // empty declaration
+        return Ok(Declaration {
+            name,
+            typ: typ.kind,
+            val: DeclarationValue::Uninitialized,
+        });
+    }
+
+    // equal
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Equal))?;
+    // value
+    let val = match typ.kind {
+        Type::Untyped => todo!(),
+        Type::Array(_) => todo!(),
+        Type::Function(_, _) => {
+            consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceLeft))?;
+            let mut statements = Vec::new();
+            while *idx < tokens.len()
+                && !matches!(
+                    tokens[*idx].kind,
+                    TokenKind::Operator(Operator::BraceRight) | TokenKind::Eof
+                )
+            {
+                let val = parse_statement(tokens, idx)?;
+            }
+            consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceRight))?;
+            DeclarationValue::FunctionBody(statements)
+        }
+        Type::Bool | Type::Char | Type::String | Type::Int => {
+            let val = consume_value(tokens, idx)?;
+            // semicolon
+            consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+            DeclarationValue::Expression(from_token_value_to_expression(val))
+        }
+        Type::Tuple(_, _) => todo!(),
+        Type::Void => todo!(),
+    };
+
+    Ok(Declaration {
+        name,
+        typ: typ.kind,
+        val,
     })
 }
 
@@ -175,12 +245,7 @@ fn from_token_value_to_expression(val: Token<Value>) -> Expression {
 
 fn consume_value(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Value>, String> {
     let prev_idx = *idx;
-    consume(
-        false,
-        &tokens[prev_idx],
-        idx,
-        TokenKind::Value(Value::Constant(Constant::Bool(false))),
-    )?;
+    consume(false, &tokens[prev_idx], idx, TokenKind::constant())?;
     let TokenKind::Value(ref decl_val) = tokens[prev_idx].kind else {
         unreachable!()
     };
@@ -199,10 +264,8 @@ fn consume_type(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Ty
     // check for recursive/multi types
     // TODO(mhs): add the rest of recursive/multi types
     if let TokenKind::Type(Type::Function(_, _)) = &tokens[prev_idx].kind {
-        println!("idx: {idx}");
         *idx += 1;
         return consume_type_function(tokens, idx);
-        // FIXME(mhs): pending to parse function body
     }
 
     consume(false, &tokens[prev_idx], idx, TokenKind::Type(Type::Void))?;
@@ -219,18 +282,10 @@ fn consume_type(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Ty
     Ok(typ)
 }
 
-fn consume_type_function(
-    tokens: &[Token<TokenKind>],
-    idx: &mut usize,
-) -> Result<Token<Type>, String> {
+fn consume_type_function(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Type>, String> {
     let prev_idx = *idx;
     // open parenthesis
-    consume(
-        true,
-        &tokens[*idx],
-        idx,
-        TokenKind::Operator(Operator::ParenthesisLeft),
-    )?;
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::ParenthesisLeft))?;
 
     // -- start parsing arguments
     // format => arg_name : arg_type , ..
@@ -256,12 +311,7 @@ fn consume_type_function(
             continue;
         }
         if next_is_colon {
-            consume(
-                true,
-                &tokens[*idx],
-                idx,
-                TokenKind::Operator(Operator::Colon),
-            )?;
+            consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Colon))?;
             next_is_colon = false;
             next_is_type = true;
             continue;
@@ -275,12 +325,7 @@ fn consume_type_function(
             continue;
         }
         if next_is_comma {
-            consume(
-                true,
-                &tokens[*idx],
-                idx,
-                TokenKind::Operator(Operator::Comma),
-            )?;
+            consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Comma))?;
             next_is_comma = false;
             next_is_argname = true;
             continue;
@@ -298,12 +343,7 @@ fn consume_type_function(
         TokenKind::Operator(Operator::ParenthesisRight),
     )?;
     // function params done now function arrow
-    consume(
-        true,
-        &tokens[*idx],
-        idx,
-        TokenKind::Operator(Operator::Arrow),
-    )?;
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Arrow))?;
     // consume return type
     // TODO(mhs): for now we only accept single types as return values
     let return_typ = consume_type(tokens, idx)?.kind;
@@ -322,10 +362,7 @@ fn consume_type_function(
     Ok(func_typ)
 }
 
-fn consume_identifier(
-    tokens: &[Token<TokenKind>],
-    idx: &mut usize,
-) -> Result<Token<Identifier>, String> {
+fn consume_identifier(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Token<Identifier>, String> {
     let prev_idx = *idx;
     consume(
         false,
@@ -346,12 +383,7 @@ fn consume_identifier(
     Ok(val)
 }
 
-fn consume(
-    strict: bool,
-    actual: &Token<TokenKind>,
-    idx: &mut usize,
-    expected: TokenKind,
-) -> Result<(), String> {
+fn consume(strict: bool, actual: &Token<TokenKind>, idx: &mut usize, expected: TokenKind) -> Result<(), String> {
     let is_match = if strict {
         actual.kind.eq(&expected)
     } else {
@@ -363,7 +395,7 @@ fn consume(
         Ok(())
     } else {
         Err(format!(
-            "Expected '{:?}' but got '{:?}' on line {} and col {}",
+            "[consume] Expected '{:?}' but got '{:?}' on line {} and col {}",
             expected, actual.kind, actual.line, actual.col
         ))
     }

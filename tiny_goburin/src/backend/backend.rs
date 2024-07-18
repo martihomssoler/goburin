@@ -1,6 +1,6 @@
 /// For now we use FASM as our assembly target language
 use crate::{
-    frontend::{self, Ast, Expression, Identifier},
+    frontend::{self, Ast, Declaration, Expression, Identifier, Statement},
     middleend::{Ir, IrState},
 };
 use std::{
@@ -73,8 +73,7 @@ pub struct X86_64 {
 }
 
 impl X86_64 {
-    const SCRATCH_REGS: [&'static str; 7] =
-        ["%rbx", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"];
+    const SCRATCH_REGS: [&'static str; 7] = ["%rbx", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"];
 }
 
 impl Target for X86_64 {
@@ -100,11 +99,7 @@ impl Target for X86_64 {
         // code starts
         writeln!(code, r#"_start:"#);
 
-        codegen_decl(&mut ir, &mut code);
-
-        writeln!(code, r#"mov rdi, 0"#);
-        writeln!(code, r#"call exit"#);
-        writeln!(code);
+        codegen_definition(&mut ir, &mut code);
 
         // data section
         writeln!(code, r#"section '.data' writeable"#);
@@ -158,30 +153,55 @@ impl Target for X86_64 {
     }
 }
 
-fn codegen_decl(ir: &mut Ir, code: &mut String) {
-    for decl in &mut ir.decls {
-        if let Some(expr) = &mut decl.val {
-            codegen_expr(&mut ir.state, expr, code);
+fn codegen_definition(ir: &mut Ir, code: &mut String) {
+    for def in &mut ir.program {
+        match &mut def.val {
+            frontend::DefinitionValue::FunctionBody(stmts) => {
+                for stmt in stmts {
+                    codegen_stmt(&mut ir.state, stmt, code);
+                }
+            }
+        }
+    }
+}
+
+fn codegen_stmt(state: &mut IrState, stmt: &mut Statement, code: &mut String) {
+    match stmt {
+        Statement::Declaration(d) => codegen_decl(state, d, code),
+        Statement::Expression(e) => codegen_expr(state, e, code),
+        Statement::Print(p) => codegen_print(state, p, code),
+        Statement::Return(r) => codegen_return(state, r, code),
+    }
+}
+
+fn codegen_decl(state: &mut IrState, decl: &mut Declaration, code: &mut String) {
+    match &mut decl.val {
+        frontend::DeclarationValue::Uninitialized => (),
+        frontend::DeclarationValue::Expression(expr) => codegen_expr(state, expr, code),
+        frontend::DeclarationValue::FunctionBody(stmts) => {
+            for stmt in stmts {
+                codegen_stmt(state, stmt, code);
+            }
         }
     }
 }
 
 fn codegen_expr(state: &mut IrState, expr: &mut Expression, code: &mut String) {
+    println!("{expr}");
     match &mut expr.kind {
         frontend::ExpressionKind::LiteralInteger(i) => {
-            state.var_insert(&expr.node.symbol.clone().unwrap().name, &format!("{i}"));
+            state.var_insert(&expr.name, &format!("{i}"));
         }
         frontend::ExpressionKind::LiteralString(s) => {
             let str_label = format!("str_{}", state.strs.len());
             state.str_insert(s, &str_label);
         }
         frontend::ExpressionKind::Identifier(_) => todo!(),
-        frontend::ExpressionKind::PrintCall(print) => codegen_printcall(state, print, code),
     }
 }
 
-fn codegen_printcall(state: &mut IrState, print: &mut frontend::PrintCall, code: &mut String) {
-    for expr in &print.exprs {
+fn codegen_print(state: &mut IrState, exprs: &[Expression], code: &mut String) {
+    for expr in exprs {
         match &expr.kind {
             frontend::ExpressionKind::LiteralInteger(i) => {
                 state.var_insert(&expr.name, &format!("{i}"));
@@ -206,8 +226,15 @@ fn codegen_printcall(state: &mut IrState, print: &mut frontend::PrintCall, code:
                 writeln!(code, r#"mov rsi, {s}"#);
                 writeln!(code, r#"call printf"#);
             }
-            frontend::ExpressionKind::PrintCall(_) => todo!(),
         }
     }
+}
+
+fn codegen_return(state: &mut IrState, r: &mut Expression, code: &mut String) {
+    codegen_expr(state, r, code);
+
+    writeln!(code, r#"mov rdi, 0"#);
+    writeln!(code, r#"call exit"#);
+    writeln!(code);
 }
 // --- ---

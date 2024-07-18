@@ -64,7 +64,9 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     col += 1;
                     TokenKind::Operator(Operator::LogicAnd)
                 } else {
-                    errors.push(format!("Logical And is written as `&&` but only one `&` was provided. {line}:{col}"));
+                    errors.push(format!(
+                        "[l_tokenize] Logical And is written as `&&` but only one `&` was provided. {line}:{col}"
+                    ));
                     continue;
                 }
             }
@@ -75,7 +77,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     TokenKind::Operator(Operator::LogicOr)
                 } else {
                     errors.push(format!(
-                        "Logical Or is written as `||` but only one `|` was provided. {line}:{col}"
+                        "[l_tokenize] Logical Or is written as `||` but only one `|` was provided. {line}:{col}"
                     ));
                     continue;
                 }
@@ -132,7 +134,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 }
                 let ch = if idx + 1 < chars.len() && !chars[idx + 1].eq(&'\'') {
                     // the char is not closed by a '
-                    errors.push(format!("Chars have to be enclosed in '. {line}:{col}"));
+                    errors.push(format!("[l_tokenize] Chars have to be enclosed in '. {line}:{col}"));
                     continue;
                 } else {
                     chars[idx]
@@ -145,9 +147,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
             '"' => l_tokenize_kind_string(&mut idx, &chars, &mut col),
             c if c.is_alphabetic() || c.eq(&'_') => {
                 let mut id = c.to_string();
-                while idx < chars.len()
-                    && (chars[idx].is_ascii_alphanumeric() || chars[idx].eq(&'_'))
-                {
+                while idx < chars.len() && (chars[idx].is_ascii_alphanumeric() || chars[idx].eq(&'_')) {
                     id.push(chars[idx]);
                     idx += 1;
                     col += 1;
@@ -176,7 +176,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
             }
             _ => {
                 errors.push(format!(
-                    "Unexpected character {c:?} at line {line} and col {col}"
+                    "[l_tokenize] Unexpected character {c:?} at line {line} and col {col}"
                 ));
                 continue;
             }
@@ -248,13 +248,7 @@ fn l_tokenize_kind_string(idx: &mut usize, chars: &[char], col: &mut usize) -> T
     TokenKind::Value(Value::Constant(Constant::String(str)))
 }
 
-fn l_tokenize_kind_int(
-    c: char,
-    is_negative: bool,
-    idx: &mut usize,
-    chars: &[char],
-    col: &mut usize,
-) -> TokenKind {
+fn l_tokenize_kind_int(c: char, is_negative: bool, idx: &mut usize, chars: &[char], col: &mut usize) -> TokenKind {
     let mut number = c.to_string();
     while *idx < chars.len() && chars[*idx].is_ascii_digit() {
         number.push(chars[*idx]);

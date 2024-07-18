@@ -62,15 +62,15 @@ pub mod tests {
 
                 let output_file = test_path.clone().with_extension("output");
                 let Ok(expected_output_content) = std::fs::read_to_string(output_file) else {
-                    println!(
-                        "ERROR --> Skipping '{filename}.gobo' : No '.output' file found for it",
-                    );
+                    println!("ERROR --> Skipping '{filename}.gobo' : No '.output' file found for it",);
                     return Err(std::io::Error::last_os_error());
                 };
 
                 println!("[[ COMPILING ]] => '{:}.gobo'", filename);
-                let res = compile_file(&test_path);
-                assert_eq!(Ok(()), res);
+                if let Err(err) = compile_file(&test_path) {
+                    println!("{err}");
+                    panic!();
+                }
 
                 print!("--> [ Executing '{:}' ]", filename);
                 let mut command_output = Command::new(format!("./{filename}"))
@@ -82,10 +82,7 @@ pub mod tests {
                         .to_string();
                     println!("--> [ EXECUTING ERROR ] {command_error:?}");
                 }
-                assert_eq!(
-                    command_output.status,
-                    <ExitStatus as std::default::Default>::default()
-                );
+                assert_eq!(command_output.status, <ExitStatus as std::default::Default>::default());
                 println!(" ... OK");
 
                 print!("--> [ Comparing execution with '{filename}.output' ]",);

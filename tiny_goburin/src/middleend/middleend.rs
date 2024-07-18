@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::frontend::{Ast, Declaration, SymbolTable};
+use crate::frontend::{Ast, Declaration, Definition, SymbolTable};
 
 pub fn middleend_pass(ast: Ast) -> Result<Ir, String> {
     let ir = Ir {
-        decls: ast.declarations,
+        program: ast.program,
         state: IrState {
             symbol_table: ast.symbol_table,
             vars: Vec::new(),
@@ -15,7 +15,7 @@ pub fn middleend_pass(ast: Ast) -> Result<Ir, String> {
 }
 
 pub struct Ir {
-    pub decls: Vec<Declaration>,
+    pub program: Vec<Definition>,
     pub state: IrState,
 }
 
