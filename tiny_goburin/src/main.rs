@@ -6,12 +6,8 @@
     clippy::needless_bool
 )]
 
-#[path = "backend/backend.rs"]
-mod backend;
 #[path = "compiler/compiler.rs"]
 mod compiler;
-#[path = "middleend/middleend.rs"]
-mod middleend;
 
 use compiler::c_compile_file;
 use std::{env, path::PathBuf};
