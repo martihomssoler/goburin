@@ -1,16 +1,59 @@
-use std::ops::Deref;
+mod p0_0_tokenize;
+mod p1_0_parse;
+mod p1_1_name_resolution;
+mod p1_2_static_type_checking;
+mod p2_0_intermediate_representation;
+mod p3_0_codegen;
 
-mod lexer;
-mod parser;
-mod semantic;
+pub use p0_0_tokenize::*;
+pub use p1_0_parse::*;
+pub use p1_1_name_resolution::*;
+pub use p1_2_static_type_checking::*;
+pub use p2_0_intermediate_representation::*;
+pub use p3_0_codegen::*;
 
-pub(crate) fn frontend_pass(source: &str) -> Result<Ast, String> {
-    let tokens = lexer::l_tokenize(source)?; // print_tokens(&tokens);
-    let ast = parser::p_parse(tokens)?; // print_ast(&ast);
-    let ast = semantic::s_check(ast)?; // print_ast(&ast);
-                                       // print_ast(&ast);
-    Ok(ast)
+use std::path::PathBuf;
+
+/// The compiler architecture is based on the nanopass idea and divided into Stages.
+///
+/// A Stage is a grouping of functionality that generate the same output representation. Subsequently,
+/// each stage of the compiler is sub-divided into passes, which represent the smallest amount of relevant wort in a
+/// particular stage. Here is an overview of the different Stages:
+///
+/// * Stage 0 - `"p0_*"` => output: [`TokenList`]. Usually called tokenization or lexing. Responsible for digesting the
+/// source file into tokens.
+/// * Stage 1 - `"p1_*"` => output: [`Ast`]. Usually called parsing. All passes that produce an [`Ast`], such as
+/// typechecking, belong here.
+/// * Stage 2 - `"p2_*"` => output: [`IR`]. Home to some of the earlier optimizations.
+/// * Stage 3 - `"p2_*"` => output: [`binary`]. Target dependant code generation.
+pub fn c_compile_file(file_path: PathBuf) -> Result<(), String> {
+    SourceFile::new(&file_path)?
+        // Stage 0
+        .p0_0_tokenize()?
+        // Stage 1
+        .p1_0_parse()?
+        .p1_1_name_resolution()?
+        .p1_2_static_type_checking()?
+        // Stage 2
+        .p2_0_ir()?
+        // Stage 3
+        .p3_0_codegen(&file_path, &mut X86_64::default())?; // comment
+
+    Ok(())
 }
+
+pub struct SourceFile(String);
+impl SourceFile {
+    pub fn new(path: &Path) -> Result<Self, String> {
+        // [`canonicalize`] converts the file_path into an absolute path, in case the user provided a relative path.
+        let canonized_path = std::fs::canonicalize(path).map_err(|e| format!("{e} : {path:?}"))?;
+        let source = std::fs::read_to_string(&canonized_path).map_err(|e| format!("{e} : {canonized_path:?}"))?;
+        Ok(Self(source))
+    }
+}
+
+// TODO(mhs): move this to a "common"/"shared" module
+use std::ops::Deref;
 
 // --- SEMANTIC ---
 #[derive(Default)]
@@ -435,5 +478,242 @@ fn print_tokens(tokens: &[Token<TokenKind>]) {
         "Tokens --> {}",
         tokens.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", ")
     );
+}
+// --- ---
+
+pub struct Ir {
+    pub program: Vec<Definition>,
+    pub state: IrState,
+}
+
+pub struct IrState {
+    pub symbol_table: SymbolTable,
+    pub vars: Vec<(String, String)>,
+    pub strs: Vec<(String, String)>,
+}
+
+impl IrState {
+    pub fn var_insert(&mut self, name: &str, val: &str) {
+        self.vars.push((name.to_owned(), val.to_owned()));
+    }
+
+    pub fn var_get(&mut self, name: &str) -> Option<String> {
+        for i in (0..self.vars.len()).rev() {
+            let curr_var = &self.vars[i];
+
+            if curr_var.0.eq(name) {
+                return Some(curr_var.1.clone());
+            }
+        }
+
+        None
+    }
+
+    pub fn str_insert(&mut self, name: &str, val: &str) {
+        self.strs.push((name.to_owned(), val.to_owned()));
+    }
+
+    pub fn str_get(&mut self, name: &str) -> Option<String> {
+        for i in (0..self.strs.len()).rev() {
+            let curr_var = &self.strs[i];
+
+            if curr_var.0.eq(name) {
+                return Some(curr_var.1.clone());
+            }
+        }
+
+        None
+    }
+}
+
+/// For now we use FASM as our assembly target language
+use std::{
+    fmt::Write,
+    fs::File,
+    path::Path,
+    process::{Command, Stdio},
+};
+
+// --- TARGET ---
+pub trait Target {
+    fn codegen(&mut self, ir: Ir) -> Result<String, String>;
+
+    fn scratch_alloc(&mut self) -> u32;
+    fn scratch_free(&mut self, r: u32);
+    fn scratch_name(&self, r: u32) -> String;
+
+    fn label_create(&mut self) -> u32;
+    fn label_name(&self, l: u32) -> String;
+}
+
+#[derive(Default)]
+pub struct X86_64 {
+    pub regs: [bool; X86_64::SCRATCH_REGS.len()],
+}
+
+impl X86_64 {
+    const SCRATCH_REGS: [&'static str; 7] = ["%rbx", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"];
+}
+
+impl Target for X86_64 {
+    fn codegen(&mut self, mut ir: Ir) -> Result<String, String> {
+        let mut errors: Vec<String> = Vec::new();
+        let mut code = String::new();
+
+        // --- PRELUDE ---
+        // file format
+        writeln!(code, r#"format ELF64"#);
+        writeln!(code);
+
+        // code section
+        writeln!(code, r#"section '.text' executable"#);
+        writeln!(code);
+        // make start visible
+        writeln!(code, r#"public _start"#);
+        writeln!(code);
+        // declare external functions
+        writeln!(code, r#"extrn printf"#);
+        writeln!(code, r#"extrn exit"#);
+        writeln!(code);
+        // code starts
+        writeln!(code, r#"_start:"#);
+
+        codegen_definition(&mut ir, &mut code);
+
+        // data section
+        writeln!(code, r#"section '.data' writeable"#);
+        writeln!(code);
+        writeln!(code, r#"fmt_int: db "%d", 0"#);
+        writeln!(code, r#"fmt_char: db "%c", 0"#);
+        writeln!(code, r#"fmt_string: db "%s", 0"#);
+
+        for (str_content, str_label) in ir.state.strs {
+            let str_content = str_content.replace('\n', "\", 10, \"");
+            writeln!(code, r#"{str_label}: db "{str_content}", 0"#);
+        }
+
+        if !errors.is_empty() {
+            return Err(errors.join("\n"));
+        }
+
+        Ok(code)
+    }
+
+    fn scratch_alloc(&mut self) -> u32 {
+        for i in 0..self.regs.len() {
+            if !self.regs[i] {
+                self.regs[i] = true;
+                return i as u32;
+            }
+        }
+        u32::MAX
+    }
+
+    fn scratch_free(&mut self, r: u32) {
+        if (r as usize) < self.regs.len() {
+            self.regs[r as usize] = false;
+        }
+    }
+
+    fn scratch_name(&self, r: u32) -> String {
+        if (r as usize) < self.regs.len() {
+            return X86_64::SCRATCH_REGS[r as usize].to_string();
+        }
+        println!("[PANIC ERROR] Register_Overflow");
+        panic!()
+    }
+
+    fn label_create(&mut self) -> u32 {
+        todo!()
+    }
+
+    fn label_name(&self, _l: u32) -> String {
+        todo!()
+    }
+}
+
+fn codegen_definition(ir: &mut Ir, code: &mut String) {
+    for def in &mut ir.program {
+        match &mut def.val {
+            DefinitionValue::FunctionBody(stmts) => {
+                for stmt in stmts {
+                    codegen_stmt(&mut ir.state, stmt, code);
+                }
+            }
+        }
+    }
+}
+
+fn codegen_stmt(state: &mut IrState, stmt: &mut Statement, code: &mut String) {
+    match stmt {
+        Statement::Declaration(d) => codegen_decl(state, d, code),
+        Statement::Expression(e) => codegen_expr(state, e, code),
+        Statement::Print(p) => codegen_print(state, p, code),
+        Statement::Return(r) => codegen_return(state, r, code),
+    }
+}
+
+fn codegen_decl(state: &mut IrState, decl: &mut Declaration, code: &mut String) {
+    match &mut decl.val {
+        DeclarationValue::Uninitialized => (),
+        DeclarationValue::Expression(expr) => codegen_expr(state, expr, code),
+        DeclarationValue::FunctionBody(stmts) => {
+            for stmt in stmts {
+                codegen_stmt(state, stmt, code);
+            }
+        }
+    }
+}
+
+fn codegen_expr(state: &mut IrState, expr: &mut Expression, code: &mut String) {
+    println!("{expr}");
+    match &mut expr.kind {
+        ExpressionKind::LiteralInteger(i) => {
+            state.var_insert(&expr.name, &format!("{i}"));
+        }
+        ExpressionKind::LiteralString(s) => {
+            let str_label = format!("str_{}", state.strs.len());
+            state.str_insert(s, &str_label);
+        }
+        ExpressionKind::Identifier(_) => todo!(),
+    }
+}
+
+fn codegen_print(state: &mut IrState, exprs: &[Expression], code: &mut String) {
+    for expr in exprs {
+        match &expr.kind {
+            ExpressionKind::LiteralInteger(i) => {
+                state.var_insert(&expr.name, &format!("{i}"));
+            }
+            ExpressionKind::LiteralString(s) => {
+                let str_label = format!("str_{}", state.strs.len());
+                state.str_insert(s, &str_label);
+
+                writeln!(code, r#"mov rdi, fmt_string"#);
+                writeln!(code, r#"mov rsi, {}"#, str_label);
+                writeln!(code, r#"call printf"#);
+            }
+            ExpressionKind::Identifier(id) => {
+                let Some(s) = state.var_get(id) else {
+                    println!("[ERROR]");
+                    println!("VARS:\n{:?}", state.vars);
+                    println!("STRS:\n{:?}", state.strs);
+                    panic!("Symbol {id:?} should be resolved by now");
+                };
+
+                writeln!(code, r#"mov rdi, fmt_int"#);
+                writeln!(code, r#"mov rsi, {s}"#);
+                writeln!(code, r#"call printf"#);
+            }
+        }
+    }
+}
+
+fn codegen_return(state: &mut IrState, r: &mut Expression, code: &mut String) {
+    codegen_expr(state, r, code);
+
+    writeln!(code, r#"mov rdi, 0"#);
+    writeln!(code, r#"call exit"#);
+    writeln!(code);
 }
 // --- ---

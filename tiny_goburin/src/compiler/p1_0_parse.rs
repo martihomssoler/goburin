@@ -1,6 +1,11 @@
+use super::*;
 use std::os::unix::fs::FileTypeExt;
 
-use super::*;
+impl TokenList {
+    pub fn p1_0_parse(self) -> Result<Ast, String> {
+        p_parse(self.tokens)
+    }
+}
 
 pub fn p_parse(tokens: Vec<Token<TokenKind>>) -> Result<Ast, String> {
     let mut errors: Vec<String> = Vec::new();

@@ -6,6 +6,14 @@
     clippy::needless_bool
 )]
 
+#[path = "backend/backend.rs"]
+mod backend;
+#[path = "compiler/compiler.rs"]
+mod compiler;
+#[path = "middleend/middleend.rs"]
+mod middleend;
+
+use compiler::c_compile_file;
 use std::{env, path::PathBuf};
 
 fn main() -> Result<(), String> {
@@ -13,7 +21,7 @@ fn main() -> Result<(), String> {
     let count = args.len();
     match count {
         2 => {
-            compile_file(&args.nth(1).unwrap().into())?;
+            c_compile_file(args.nth(1).unwrap().into())?;
         }
         _ => {
             println!("Error: Wrong number of arguments provided.");
@@ -24,31 +32,15 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-pub fn compile_file(file_path: &PathBuf) -> Result<(), String> {
-    let file_path = std::fs::canonicalize(file_path).map_err(|e| e.to_string())?;
-    let source = std::fs::read_to_string(&file_path).unwrap();
-    let ast = frontend::frontend_pass(&source)?;
-    let ir = middleend::middleend_pass(ast)?;
-    backend::backend_pass(&file_path, ir)
-}
-
-#[path = "backend/backend.rs"]
-mod backend;
-#[path = "frontend/frontend.rs"]
-mod frontend;
-#[path = "middleend/middleend.rs"]
-mod middleend;
-
 #[cfg(test)]
 pub mod tests {
+    use super::*;
     use core::panic;
     use std::{
         io::{Read, Stdout, Write},
         path::PathBuf,
         process::{Command, ExitStatus, Stdio},
     };
-
-    use crate::compile_file;
 
     #[test]
     fn goburin_compiler() -> std::io::Result<()> {
@@ -67,12 +59,12 @@ pub mod tests {
                 };
 
                 println!("[[ COMPILING ]] => '{:}.gobo'", filename);
-                if let Err(err) = compile_file(&test_path) {
+                if let Err(err) = c_compile_file(test_path.clone()) {
                     println!("{err}");
                     panic!();
                 }
 
-                print!("--> [ Executing '{:}' ]", filename);
+                println!("--> [ Executing '{:}' ]", filename);
                 let mut command_output = Command::new(format!("./{filename}"))
                     .current_dir(tests_dir.clone())
                     .output()?;
@@ -85,13 +77,13 @@ pub mod tests {
                 assert_eq!(command_output.status, <ExitStatus as std::default::Default>::default());
                 println!(" ... OK");
 
-                print!("--> [ Comparing execution with '{filename}.output' ]",);
+                println!("--> [ Comparing execution with '{filename}.output' ]",);
                 let actual_output_content =
                     std::str::from_utf8(&command_output.stdout).expect("Output should be UTF-8");
                 assert_eq!(actual_output_content, expected_output_content);
                 println!(" ... OK");
 
-                print!("--> [ Removing files '{:}' ]", filename);
+                println!("--> [ Removing files '{:}' ]", filename);
                 let output = Command::new("rm")
                     .arg(filename)
                     .arg(format!("{filename}.asm"))

@@ -1,6 +1,21 @@
 use super::*;
 
-pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
+pub struct TokenList {
+    pub tokens: Vec<Token<TokenKind>>,
+}
+
+impl SourceFile {
+    pub fn p0_0_tokenize(self) -> Result<TokenList, String> {
+        t_tokenize(self)
+    }
+}
+
+/// {?} Pass
+///
+/// * input : path to the source file
+/// * output : list of tokens
+fn t_tokenize(input: SourceFile) -> Result<TokenList, String> {
+    let source = input.0;
     let mut errors: Vec<String> = Vec::new();
     let mut tokens: Vec<Token<TokenKind>> = Vec::new();
     let chars = source.chars().collect::<Vec<_>>();
@@ -100,7 +115,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                     let ch = chars[idx];
                     idx += 1;
                     col += 1;
-                    l_tokenize_kind_int(ch, true, &mut idx, &chars, &mut col)
+                    t_tokenize_kind_int(ch, true, &mut idx, &chars, &mut col)
                 } else {
                     TokenKind::Operator(Operator::Minus)
                 }
@@ -124,7 +139,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 }
             }
             '*' => TokenKind::Operator(Operator::Star),
-            d if d.is_ascii_digit() => l_tokenize_kind_int(c, false, &mut idx, &chars, &mut col),
+            d if d.is_ascii_digit() => t_tokenize_kind_int(c, false, &mut idx, &chars, &mut col),
             '\'' => {
                 let is_escape_char = idx < chars.len() && chars[idx].eq(&'\\');
 
@@ -144,7 +159,7 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
                 col += 1;
                 TokenKind::Value(Value::Constant(Constant::Char(ch)))
             }
-            '"' => l_tokenize_kind_string(&mut idx, &chars, &mut col),
+            '"' => t_tokenize_kind_string(&mut idx, &chars, &mut col),
             c if c.is_alphabetic() || c.eq(&'_') => {
                 let mut id = c.to_string();
                 while idx < chars.len() && (chars[idx].is_ascii_alphanumeric() || chars[idx].eq(&'_')) {
@@ -203,10 +218,12 @@ pub fn l_tokenize(source: &str) -> Result<Vec<Token<TokenKind>>, String> {
     };
     tokens.push(token);
 
-    Ok(tokens)
+    let token_list = TokenList { tokens };
+
+    Ok(token_list)
 }
 
-fn l_tokenize_kind_string(idx: &mut usize, chars: &[char], col: &mut usize) -> TokenKind {
+fn t_tokenize_kind_string(idx: &mut usize, chars: &[char], col: &mut usize) -> TokenKind {
     let mut can_escape = false;
     let mut str = String::new();
     while *idx < chars.len() {
@@ -248,7 +265,7 @@ fn l_tokenize_kind_string(idx: &mut usize, chars: &[char], col: &mut usize) -> T
     TokenKind::Value(Value::Constant(Constant::String(str)))
 }
 
-fn l_tokenize_kind_int(c: char, is_negative: bool, idx: &mut usize, chars: &[char], col: &mut usize) -> TokenKind {
+fn t_tokenize_kind_int(c: char, is_negative: bool, idx: &mut usize, chars: &[char], col: &mut usize) -> TokenKind {
     let mut number = c.to_string();
     while *idx < chars.len() && chars[*idx].is_ascii_digit() {
         number.push(chars[*idx]);
