@@ -217,9 +217,14 @@ impl X86_64 {
                 writeln!(code, r#"mov {}, {str_label}"#, self.scratch_name(expr.node.reg));
             }
             ExpressionKind::Identifier(id) => {
+                if let Some(res) = state.var_get(id) {
+                    if let Some(idx) = Self::SCRATCH_REGS.iter().position(|reg| res.eq(reg)) {
+                        expr.node.reg = idx as u32;
+                        return;
+                    }
+                }
                 expr.node.reg = self.scratch_alloc();
                 let symbol = state.var_get(id).unwrap();
-                writeln!(code, r#";; {id} = {symbol}"#);
                 writeln!(code, r#"mov {}, {symbol}"#, self.scratch_name(expr.node.reg));
             }
             ExpressionKind::LiteralBoolean(_) => todo!(),
@@ -233,7 +238,6 @@ impl X86_64 {
                 let r = right.node.reg;
 
                 writeln!(code, r#"add {}, {}"#, self.scratch_name(l), self.scratch_name(r));
-                self.scratch_free(r);
                 expr.node.reg = l;
             }
             ExpressionKind::BinaryOpLower => {
@@ -245,7 +249,6 @@ impl X86_64 {
                 let r = right.node.reg;
 
                 writeln!(code, r#"cmp {}, {}"#, self.scratch_name(l), self.scratch_name(r));
-                self.scratch_free(r);
             }
             ExpressionKind::BinaryOpSub => todo!(),
             ExpressionKind::BinaryOpMul => todo!(),
@@ -276,8 +279,8 @@ impl X86_64 {
     }
 
     fn codegen_print(&mut self, state: &mut IrState, exprs: &mut Vec<Expression>, code: &mut String) {
+        writeln!(code, r#";; print start"#);
         for expr in exprs {
-            writeln!(code, r#";; PRINT {:?}"#, expr.kind);
             // save "CALLER" registers (https://web.stanford.edu/class/archive/cs/cs107/cs107.1174/guide_x86-64.html)
             writeln!(code, r#"push rcx"#);
             writeln!(code, r#"push rdx"#);
@@ -298,7 +301,6 @@ impl X86_64 {
                 }
                 ExpressionKind::Identifier(id) => {
                     let s = state.var_get(id).unwrap();
-                    writeln!(code, r#";; {id} = {s}"#);
                     writeln!(code, r#"mov rdi, fmt_int"#);
                     writeln!(code, r#"mov rsi, {s}"#);
                     writeln!(code, r#"call printf"#);
@@ -325,6 +327,7 @@ impl X86_64 {
             writeln!(code, r#"pop r8"#);
             writeln!(code, r#"pop rdx"#);
             writeln!(code, r#"pop rcx"#);
+            writeln!(code, r#";; print end"#);
         }
     }
 
@@ -339,6 +342,7 @@ impl X86_64 {
     // for now loops only support for-like loops where the condition is checked ad the begining of
     // every loop and there is an inconditional jump to the begining of the loop
     fn codegen_loop(&mut self, state: &mut IrState, l: &mut Loop, code: &mut String) {
+        writeln!(code, r#";; LOOP "#);
         let Loop {
             init_expr_opt,
             control_expr_opt,
@@ -349,19 +353,23 @@ impl X86_64 {
         let label_end = self.label_create();
 
         // initialize variables if an init expression exists
+        writeln!(code, r#";; init"#);
         if let Some(expr) = init_expr_opt.as_mut() {
             self.codegen_expr(state, expr, code);
         }
         // add the jump label at the beginning of the loop
         writeln!(code, r#"{}:"#, self.label_name(label_begin));
+        writeln!(code, r#";; condition"#);
         if let Some(expr) = control_expr_opt.as_mut() {
             self.codegen_expr(state, expr, code);
             // conditional jump to break the loop, for now only if not equal to zero
-            writeln!(code, r#"jnz {}"#, self.label_name(label_end));
+            writeln!(code, r#"jz {}"#, self.label_name(label_end));
         }
+        writeln!(code, r#";; statements"#);
         for stmt in loop_body {
             self.codegen_stmt(state, stmt, code)
         }
+        writeln!(code, r#";; next"#);
         if let Some(expr) = next_expr_opt.as_mut() {
             self.codegen_expr(state, expr, code);
         }
@@ -372,11 +380,9 @@ impl X86_64 {
 
     fn codegen_assign(&mut self, state: &mut IrState, a: &mut Assignment, code: &mut String) {
         let Assignment { name, val } = a;
-        writeln!(code, r#";; {name} = {}"#, val.name);
         self.codegen_expr(state, val, code);
         let val_reg = val.node.reg;
         let assign_dest = state.var_get(name).unwrap();
-        self.scratch_free(val_reg);
     }
 }
 // --- ---
