@@ -12,7 +12,7 @@ pub use p1_2_static_type_checking::*;
 pub use p2_0_intermediate_representation::*;
 pub use p3_0_codegen::*;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The compiler architecture is based on the nanopass idea and divided into Stages.
 ///
@@ -163,10 +163,29 @@ pub enum DefinitionValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement {
+    Block(Vec<Statement>),
+    Conditional(Conditional),
     Declaration(Declaration),
+    Assignment(Assignment),
     Expression(Expression),
+    Loop(Loop),
     Print(Vec<Expression>),
     Return(Expression),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Conditional {
+    pub control_expr: Expression,
+    pub if_body: Vec<Statement>,
+    pub else_body_opt: Vec<Statement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Loop {
+    pub init_expr_opt: Option<Expression>,
+    pub control_expr_opt: Option<Expression>,
+    pub next_expr_opt: Option<Expression>,
+    pub loop_body: Vec<Statement>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +193,12 @@ pub struct Declaration {
     pub name: String,
     pub typ: Type,
     pub val: DeclarationValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Assignment {
+    pub name: String,
+    pub val: Expression,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,6 +210,7 @@ pub enum DeclarationValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expression {
+    // TODO(mhs): what is the `name` used for? I think it is for symbol lookup
     pub name: String,
     pub kind: ExpressionKind,
     pub node: AstNode,
@@ -194,9 +220,23 @@ pub struct Expression {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExpressionKind {
+    Identifier(String),
+    LiteralBoolean(bool),
+    LiteralCharacter(char),
     LiteralInteger(i64),
     LiteralString(String),
-    Identifier(String),
+    BinaryOpAssignment,
+    BinaryOpAdd,
+    BinaryOpSub,
+    BinaryOpMul,
+    BinaryOpDiv,
+    BinaryOpLower,
+    /// a[b] -> left: a, right: b
+    BinaryOpArrayAccess,
+    UnaryOpNeg,
+    UnaryOpNot,
+    FuncCall,
+    FuncArg,
 }
 
 // --- ---
@@ -263,6 +303,19 @@ impl std::fmt::Display for Expression {
             ExpressionKind::LiteralInteger(i) => format!("{i}"),
             ExpressionKind::LiteralString(s) => format!("\"{s}\""),
             ExpressionKind::Identifier(id) => format!("\"{id}\""),
+            ExpressionKind::LiteralBoolean(_) => todo!(),
+            ExpressionKind::LiteralCharacter(_) => todo!(),
+            ExpressionKind::BinaryOpAdd => todo!(),
+            ExpressionKind::BinaryOpSub => todo!(),
+            ExpressionKind::BinaryOpMul => todo!(),
+            ExpressionKind::BinaryOpDiv => todo!(),
+            ExpressionKind::UnaryOpNeg => todo!(),
+            ExpressionKind::UnaryOpNot => todo!(),
+            ExpressionKind::BinaryOpArrayAccess => todo!(),
+            ExpressionKind::FuncCall => todo!(),
+            ExpressionKind::FuncArg => todo!(),
+            ExpressionKind::BinaryOpAssignment => todo!(),
+            ExpressionKind::BinaryOpLower => todo!(),
         };
         let l = if let Some(l) = left {
             l.as_ref().to_string()
@@ -309,6 +362,7 @@ pub enum TokenKind {
     Value(Value),
     Eof,
 }
+
 impl TokenKind {
     fn constant() -> TokenKind {
         TokenKind::Value(Value::Constant(Constant::Bool(false)))
@@ -330,6 +384,7 @@ pub enum Keyword {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     Untyped,
+    // FIXME(mhs): cannot create "Array [10] Integer", just "Array Integer"
     Array(Box<Type>),
     Bool,
     Char,
@@ -391,7 +446,13 @@ pub struct Identifier(pub String);
 
 impl std::fmt::Display for Token<TokenKind> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.kind {
+        write!(fmt, "{}", self.kind)
+    }
+}
+
+impl std::fmt::Display for TokenKind {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
             TokenKind::Keyword(kw) => match kw {
                 Keyword::Else => write!(fmt, "Keyword: Else"),
                 Keyword::False => write!(fmt, "Keyword: False"),
@@ -418,33 +479,33 @@ impl std::fmt::Display for Token<TokenKind> {
                 Type::Untyped => write!(fmt, "Untyped"),
             },
             TokenKind::Operator(sy) => match sy {
-                Operator::Arrow => write!(fmt, "Symbol \"->\""),
-                Operator::Bang => write!(fmt, "Symbol \"!\""),
-                Operator::BangEqual => write!(fmt, "Symbol \"!=\""),
-                Operator::BraceLeft => write!(fmt, "Symbol \"{{\""),
-                Operator::BraceRight => write!(fmt, "Symbol \"}}\""),
-                Operator::BracketLeft => write!(fmt, "Symbol \"[\""),
-                Operator::BracketRight => write!(fmt, "Symbol \"]\""),
-                Operator::Caret => write!(fmt, "Symbol \"^\""),
-                Operator::Colon => write!(fmt, "Symbol \":\""),
-                Operator::Comma => write!(fmt, "Symbol \",\""),
-                Operator::Equal => write!(fmt, "Symbol \"=\""),
-                Operator::EqualEqual => write!(fmt, "Symbol \"==\""),
-                Operator::Greater => write!(fmt, "Symbol \">\""),
-                Operator::GreaterEqual => write!(fmt, "Symbol \">=\""),
-                Operator::LogicAnd => write!(fmt, "Symbol \"&&\""),
-                Operator::LogicOr => write!(fmt, "Symbol \"||\""),
-                Operator::Lower => write!(fmt, "Symbol \"<\""),
-                Operator::LowerEqual => write!(fmt, "Symbol \"<=\""),
-                Operator::Minus => write!(fmt, "Symbol \"-\""),
-                Operator::ParenthesisLeft => write!(fmt, "Symbol \"(\""),
-                Operator::ParenthesisRight => write!(fmt, "Symbol \")\""),
-                Operator::Percent => write!(fmt, "Symbol \"%\""),
-                Operator::Plus => write!(fmt, "Symbol \"+\""),
-                Operator::Point => write!(fmt, "Symbol \".\""),
-                Operator::Semicolon => write!(fmt, "Symbol \";\""),
-                Operator::Slash => write!(fmt, "Symbol \"/\""),
-                Operator::Star => write!(fmt, "Symbol \"*\""),
+                Operator::Arrow => write!(fmt, "Symbol ->"),
+                Operator::Bang => write!(fmt, "Symbol !"),
+                Operator::BangEqual => write!(fmt, "Symbol !="),
+                Operator::BraceLeft => write!(fmt, "Symbol {{"),
+                Operator::BraceRight => write!(fmt, "Symbol }}"),
+                Operator::BracketLeft => write!(fmt, "Symbol ["),
+                Operator::BracketRight => write!(fmt, "Symbol ]"),
+                Operator::Caret => write!(fmt, "Symbol ^"),
+                Operator::Colon => write!(fmt, "Symbol :"),
+                Operator::Comma => write!(fmt, "Symbol ,"),
+                Operator::Equal => write!(fmt, "Symbol ="),
+                Operator::EqualEqual => write!(fmt, "Symbol =="),
+                Operator::Greater => write!(fmt, "Symbol >"),
+                Operator::GreaterEqual => write!(fmt, "Symbol >="),
+                Operator::LogicAnd => write!(fmt, "Symbol &&"),
+                Operator::LogicOr => write!(fmt, "Symbol ||"),
+                Operator::Lower => write!(fmt, "Symbol <"),
+                Operator::LowerEqual => write!(fmt, "Symbol <="),
+                Operator::Minus => write!(fmt, "Symbol -"),
+                Operator::ParenthesisLeft => write!(fmt, "Symbol ("),
+                Operator::ParenthesisRight => write!(fmt, "Symbol )"),
+                Operator::Percent => write!(fmt, "Symbol %"),
+                Operator::Plus => write!(fmt, "Symbol +"),
+                Operator::Point => write!(fmt, "Symbol ."),
+                Operator::Semicolon => write!(fmt, "Symbol ;"),
+                Operator::Slash => write!(fmt, "Symbol /"),
+                Operator::Star => write!(fmt, "Symbol *"),
             },
             TokenKind::Value(val) => match val {
                 Value::Constant(cons) => match cons {
@@ -494,7 +555,11 @@ pub struct IrState {
 
 impl IrState {
     pub fn var_insert(&mut self, name: &str, val: &str) {
-        self.vars.push((name.to_owned(), val.to_owned()));
+        if let Some(old) = self.var_get_mut(name) {
+            val.clone_into(old);
+        } else {
+            self.vars.push((name.to_owned(), val.to_owned()));
+        }
     }
 
     pub fn var_get(&mut self, name: &str) -> Option<String> {
@@ -503,6 +568,18 @@ impl IrState {
 
             if curr_var.0.eq(name) {
                 return Some(curr_var.1.clone());
+            }
+        }
+
+        None
+    }
+
+    fn var_get_mut(&mut self, name: &str) -> Option<&mut String> {
+        for i in (0..self.vars.len()).rev() {
+            let curr_var = &self.vars[i];
+
+            if curr_var.0.eq(name) {
+                return Some(&mut self.vars[i].1);
             }
         }
 
@@ -525,195 +602,3 @@ impl IrState {
         None
     }
 }
-
-/// For now we use FASM as our assembly target language
-use std::{
-    fmt::Write,
-    fs::File,
-    path::Path,
-    process::{Command, Stdio},
-};
-
-// --- TARGET ---
-pub trait Target {
-    fn codegen(&mut self, ir: Ir) -> Result<String, String>;
-
-    fn scratch_alloc(&mut self) -> u32;
-    fn scratch_free(&mut self, r: u32);
-    fn scratch_name(&self, r: u32) -> String;
-
-    fn label_create(&mut self) -> u32;
-    fn label_name(&self, l: u32) -> String;
-}
-
-#[derive(Default)]
-pub struct X86_64 {
-    pub regs: [bool; X86_64::SCRATCH_REGS.len()],
-}
-
-impl X86_64 {
-    const SCRATCH_REGS: [&'static str; 7] = ["%rbx", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"];
-}
-
-impl Target for X86_64 {
-    fn codegen(&mut self, mut ir: Ir) -> Result<String, String> {
-        let mut errors: Vec<String> = Vec::new();
-        let mut code = String::new();
-
-        // --- PRELUDE ---
-        // file format
-        writeln!(code, r#"format ELF64"#);
-        writeln!(code);
-
-        // code section
-        writeln!(code, r#"section '.text' executable"#);
-        writeln!(code);
-        // make start visible
-        writeln!(code, r#"public _start"#);
-        writeln!(code);
-        // declare external functions
-        writeln!(code, r#"extrn printf"#);
-        writeln!(code, r#"extrn exit"#);
-        writeln!(code);
-        // code starts
-        writeln!(code, r#"_start:"#);
-
-        codegen_definition(&mut ir, &mut code);
-
-        // data section
-        writeln!(code, r#"section '.data' writeable"#);
-        writeln!(code);
-        writeln!(code, r#"fmt_int: db "%d", 0"#);
-        writeln!(code, r#"fmt_char: db "%c", 0"#);
-        writeln!(code, r#"fmt_string: db "%s", 0"#);
-
-        for (str_content, str_label) in ir.state.strs {
-            let str_content = str_content.replace('\n', "\", 10, \"");
-            writeln!(code, r#"{str_label}: db "{str_content}", 0"#);
-        }
-
-        if !errors.is_empty() {
-            return Err(errors.join("\n"));
-        }
-
-        Ok(code)
-    }
-
-    fn scratch_alloc(&mut self) -> u32 {
-        for i in 0..self.regs.len() {
-            if !self.regs[i] {
-                self.regs[i] = true;
-                return i as u32;
-            }
-        }
-        u32::MAX
-    }
-
-    fn scratch_free(&mut self, r: u32) {
-        if (r as usize) < self.regs.len() {
-            self.regs[r as usize] = false;
-        }
-    }
-
-    fn scratch_name(&self, r: u32) -> String {
-        if (r as usize) < self.regs.len() {
-            return X86_64::SCRATCH_REGS[r as usize].to_string();
-        }
-        println!("[PANIC ERROR] Register_Overflow");
-        panic!()
-    }
-
-    fn label_create(&mut self) -> u32 {
-        todo!()
-    }
-
-    fn label_name(&self, _l: u32) -> String {
-        todo!()
-    }
-}
-
-fn codegen_definition(ir: &mut Ir, code: &mut String) {
-    for def in &mut ir.program {
-        match &mut def.val {
-            DefinitionValue::FunctionBody(stmts) => {
-                for stmt in stmts {
-                    codegen_stmt(&mut ir.state, stmt, code);
-                }
-            }
-        }
-    }
-}
-
-fn codegen_stmt(state: &mut IrState, stmt: &mut Statement, code: &mut String) {
-    match stmt {
-        Statement::Declaration(d) => codegen_decl(state, d, code),
-        Statement::Expression(e) => codegen_expr(state, e, code),
-        Statement::Print(p) => codegen_print(state, p, code),
-        Statement::Return(r) => codegen_return(state, r, code),
-    }
-}
-
-fn codegen_decl(state: &mut IrState, decl: &mut Declaration, code: &mut String) {
-    match &mut decl.val {
-        DeclarationValue::Uninitialized => (),
-        DeclarationValue::Expression(expr) => codegen_expr(state, expr, code),
-        DeclarationValue::FunctionBody(stmts) => {
-            for stmt in stmts {
-                codegen_stmt(state, stmt, code);
-            }
-        }
-    }
-}
-
-fn codegen_expr(state: &mut IrState, expr: &mut Expression, code: &mut String) {
-    println!("{expr}");
-    match &mut expr.kind {
-        ExpressionKind::LiteralInteger(i) => {
-            state.var_insert(&expr.name, &format!("{i}"));
-        }
-        ExpressionKind::LiteralString(s) => {
-            let str_label = format!("str_{}", state.strs.len());
-            state.str_insert(s, &str_label);
-        }
-        ExpressionKind::Identifier(_) => todo!(),
-    }
-}
-
-fn codegen_print(state: &mut IrState, exprs: &[Expression], code: &mut String) {
-    for expr in exprs {
-        match &expr.kind {
-            ExpressionKind::LiteralInteger(i) => {
-                state.var_insert(&expr.name, &format!("{i}"));
-            }
-            ExpressionKind::LiteralString(s) => {
-                let str_label = format!("str_{}", state.strs.len());
-                state.str_insert(s, &str_label);
-
-                writeln!(code, r#"mov rdi, fmt_string"#);
-                writeln!(code, r#"mov rsi, {}"#, str_label);
-                writeln!(code, r#"call printf"#);
-            }
-            ExpressionKind::Identifier(id) => {
-                let Some(s) = state.var_get(id) else {
-                    println!("[ERROR]");
-                    println!("VARS:\n{:?}", state.vars);
-                    println!("STRS:\n{:?}", state.strs);
-                    panic!("Symbol {id:?} should be resolved by now");
-                };
-
-                writeln!(code, r#"mov rdi, fmt_int"#);
-                writeln!(code, r#"mov rsi, {s}"#);
-                writeln!(code, r#"call printf"#);
-            }
-        }
-    }
-}
-
-fn codegen_return(state: &mut IrState, r: &mut Expression, code: &mut String) {
-    codegen_expr(state, r, code);
-
-    writeln!(code, r#"mov rdi, 0"#);
-    writeln!(code, r#"call exit"#);
-    writeln!(code);
-}
-// --- ---

@@ -1,9 +1,0 @@
-main :: Function () -> Void = {
-    i : Int;
-    b : Bool;
-    s : String = "hello";
-    f : Function (x: Int, y: Int) -> Int = { return 3; }
-    temp : Int = 28;
-    print "The temperature is: ", temp, " degrees\n";
-    return 0;	
-}

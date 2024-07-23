@@ -46,7 +46,34 @@ fn resolve_stmt(st: &mut SymbolTable, stmt: &mut Statement, errors: &mut Vec<Str
             }
         }
         Statement::Return(ret) => resolve_expr(st, ret, errors),
+        Statement::Block(_) => todo!(),
+        Statement::Conditional(_) => todo!(),
+        Statement::Loop(Loop {
+            init_expr_opt,
+            control_expr_opt,
+            next_expr_opt,
+            loop_body,
+        }) => {
+            if let Some(expr) = init_expr_opt.as_mut() {
+                resolve_expr(st, expr, errors)
+            }
+            if let Some(expr) = control_expr_opt.as_mut() {
+                resolve_expr(st, expr, errors)
+            }
+            if let Some(expr) = next_expr_opt.as_mut() {
+                resolve_expr(st, expr, errors)
+            }
+            for stmt in loop_body {
+                resolve_stmt(st, stmt, errors);
+            }
+        }
+        Statement::Assignment(assign) => resolve_assign(st, assign, errors),
     }
+}
+
+fn resolve_assign(st: &mut SymbolTable, assign: &mut Assignment, errors: &mut Vec<String>) {
+    let Assignment { name, val } = assign;
+    resolve_expr(st, val, errors);
 }
 
 fn resolve_decl(st: &mut SymbolTable, decl: &mut Declaration, errors: &mut Vec<String>) {
@@ -61,6 +88,7 @@ fn resolve_decl(st: &mut SymbolTable, decl: &mut Declaration, errors: &mut Vec<S
         kind,
         typ: decl.typ.clone(),
     };
+    st.scope_symbol_bind(symbol.clone());
 
     match &mut decl.val {
         DeclarationValue::Uninitialized => return,
@@ -78,8 +106,7 @@ fn resolve_decl(st: &mut SymbolTable, decl: &mut Declaration, errors: &mut Vec<S
     let DeclarationValue::Expression(expr) = &mut decl.val else {
         return;
     };
-
-    st.scope_symbol_bind(symbol);
+    resolve_expr(st, expr, errors)
 }
 
 fn resolve_expr(st: &SymbolTable, expr: &mut Expression, errors: &mut Vec<String>) {
@@ -94,5 +121,31 @@ fn resolve_expr(st: &SymbolTable, expr: &mut Expression, errors: &mut Vec<String
                 ));
             }
         },
+        ExpressionKind::LiteralBoolean(_) => todo!(),
+        ExpressionKind::LiteralCharacter(_) => todo!(),
+        ExpressionKind::BinaryOpAssignment
+        | ExpressionKind::BinaryOpLower
+        | ExpressionKind::BinaryOpSub
+        | ExpressionKind::BinaryOpMul
+        | ExpressionKind::BinaryOpDiv
+        | ExpressionKind::BinaryOpAdd => {
+            if expr.left.is_none() || expr.right.is_none() {
+                errors.push(format!(
+                    "[ERROR]: {:?} must have two expressions left:{:?} and right:{:?} in {}:{}",
+                    expr.kind, expr.left, expr.right, expr.node.token.line, expr.node.token.col
+                ));
+            }
+            if let Some(expr) = expr.left.as_mut() {
+                resolve_expr(st, expr, errors)
+            }
+            if let Some(expr) = expr.right.as_mut() {
+                resolve_expr(st, expr, errors)
+            }
+        }
+        ExpressionKind::UnaryOpNeg => todo!(),
+        ExpressionKind::UnaryOpNot => todo!(),
+        ExpressionKind::BinaryOpArrayAccess => todo!(),
+        ExpressionKind::FuncCall => todo!(),
+        ExpressionKind::FuncArg => todo!(),
     }
 }

@@ -71,13 +71,11 @@ pub mod tests {
                     println!("--> [ EXECUTING ERROR ] {command_error:?}");
                 }
                 assert_eq!(command_output.status, <ExitStatus as std::default::Default>::default());
-                println!(" ... OK");
 
                 println!("--> [ Comparing execution with '{filename}.output' ]",);
                 let actual_output_content =
                     std::str::from_utf8(&command_output.stdout).expect("Output should be UTF-8");
                 assert_eq!(actual_output_content, expected_output_content);
-                println!(" ... OK");
 
                 println!("--> [ Removing files '{:}' ]", filename);
                 let output = Command::new("rm")
@@ -89,7 +87,6 @@ pub mod tests {
                     .unwrap()
                     .code();
                 assert_eq!(output, Some(0));
-                println!(" ... OK");
 
                 println!();
             }

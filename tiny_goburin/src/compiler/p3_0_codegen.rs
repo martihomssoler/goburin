@@ -1,3 +1,4 @@
+//! For now we use FASM as our assembly target language
 use super::*;
 use std::{
     fmt::Write,
@@ -51,3 +52,331 @@ fn code_fasm_compile(file_path: &Path, code: String) -> Result<(), String> {
 
     Ok(())
 }
+
+// --- TARGET ---
+pub trait Target {
+    fn codegen(&mut self, ir: Ir) -> Result<String, String>;
+
+    fn scratch_alloc(&mut self) -> u32;
+    fn scratch_free(&mut self, r: u32);
+    fn scratch_name(&self, r: u32) -> String;
+
+    fn label_create(&mut self) -> u32;
+    fn label_name(&self, l: u32) -> String;
+}
+
+#[derive(Default)]
+pub struct X86_64 {
+    pub regs: [bool; X86_64::SCRATCH_REGS.len()],
+    pub labels: u32,
+}
+
+impl X86_64 {
+    const SCRATCH_REGS: [&'static str; 10] = ["rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
+}
+
+impl Target for X86_64 {
+    fn codegen(&mut self, mut ir: Ir) -> Result<String, String> {
+        let mut errors: Vec<String> = Vec::new();
+        let mut code = String::new();
+
+        // --- PRELUDE ---
+        // file format
+        writeln!(code, r#"format ELF64"#);
+        writeln!(code);
+
+        // code section
+        writeln!(code, r#"section '.text' executable"#);
+        writeln!(code);
+        // make start visible
+        writeln!(code, r#"public _start"#);
+        writeln!(code);
+        // declare external functions
+        writeln!(code, r#"extrn printf"#);
+        writeln!(code, r#"extrn exit"#);
+        writeln!(code);
+        // code starts
+        writeln!(code, r#"_start:"#);
+
+        self.codegen_definition(&mut ir, &mut code);
+
+        // data section
+        writeln!(code, r#"section '.data' writeable"#);
+        writeln!(code);
+        writeln!(code, r#"fmt_int: db "%d", 0"#);
+        writeln!(code, r#"fmt_char: db "%c", 0"#);
+        writeln!(code, r#"fmt_string: db "%s", 0"#);
+
+        for (str_content, str_label) in ir.state.strs {
+            let str_content = str_content.replace('\n', "\", 10, \"");
+            writeln!(code, r#"{str_label}: db "{str_content}", 0"#);
+        }
+
+        if !errors.is_empty() {
+            return Err(errors.join("\n"));
+        }
+
+        Ok(code)
+    }
+
+    fn scratch_alloc(&mut self) -> u32 {
+        for i in 0..self.regs.len() {
+            if !self.regs[i] {
+                self.regs[i] = true;
+                return i as u32;
+            }
+        }
+        u32::MAX
+    }
+
+    fn scratch_free(&mut self, r: u32) {
+        if (r as usize) < self.regs.len() {
+            self.regs[r as usize] = false;
+        }
+    }
+
+    fn scratch_name(&self, r: u32) -> String {
+        if (r as usize) < self.regs.len() {
+            return X86_64::SCRATCH_REGS[r as usize].to_string();
+        }
+        println!("[PANIC ERROR] Register_Overflow: {r}");
+        println!("REGS: {:?}", self.regs);
+        panic!()
+    }
+
+    fn label_create(&mut self) -> u32 {
+        self.labels += 1;
+        self.labels
+    }
+
+    fn label_name(&self, l: u32) -> String {
+        format!(".L{l}")
+    }
+}
+
+impl X86_64 {
+    fn codegen_definition(&mut self, ir: &mut Ir, code: &mut String) {
+        for def in &mut ir.program {
+            println!("DEF: {:?}", def.id);
+            match &mut def.val {
+                DefinitionValue::FunctionBody(stmts) => {
+                    for stmt in stmts {
+                        self.codegen_stmt(&mut ir.state, stmt, code);
+                    }
+                }
+            }
+        }
+    }
+
+    fn codegen_stmt(&mut self, state: &mut IrState, stmt: &mut Statement, code: &mut String) {
+        match stmt {
+            Statement::Declaration(d) => self.codegen_decl(state, d, code),
+            Statement::Expression(e) => {
+                self.codegen_expr(state, e, code);
+            }
+            Statement::Print(p) => self.codegen_print(state, p, code),
+            Statement::Return(r) => self.codegen_return(state, r, code),
+            Statement::Block(_) => todo!(),
+            Statement::Conditional(_) => todo!(),
+            Statement::Loop(l) => self.codegen_loop(state, l, code),
+            Statement::Assignment(a) => self.codegen_assign(state, a, code),
+        }
+    }
+
+    fn codegen_decl(&mut self, state: &mut IrState, decl: &mut Declaration, code: &mut String) {
+        match &mut decl.val {
+            DeclarationValue::Uninitialized => {
+                state.var_insert(&decl.name, "0");
+            }
+            // Declaration w/ form => name = value;
+            DeclarationValue::Expression(expr) => {
+                // generate the code for the "value"
+                self.codegen_expr(state, expr, code);
+                // the result is in the nodes register
+                let r = expr.node.reg;
+                state.var_insert(&decl.name, &self.scratch_name(r));
+            }
+            DeclarationValue::FunctionBody(stmts) => {
+                for stmt in stmts {
+                    self.codegen_stmt(state, stmt, code);
+                }
+            }
+        }
+    }
+
+    fn codegen_expr(&mut self, state: &mut IrState, expr: &mut Expression, code: &mut String) {
+        match &mut expr.kind {
+            ExpressionKind::LiteralInteger(i) => {
+                expr.node.reg = self.scratch_alloc();
+                writeln!(code, r#"mov {}, {i}"#, self.scratch_name(expr.node.reg));
+            }
+            ExpressionKind::LiteralString(s) => {
+                let str_label = format!("str_{}", state.strs.len());
+                state.str_insert(s, &str_label);
+                expr.node.reg = self.scratch_alloc();
+                writeln!(code, r#"mov {}, {str_label}"#, self.scratch_name(expr.node.reg));
+            }
+            ExpressionKind::Identifier(id) => {
+                expr.node.reg = self.scratch_alloc();
+                let symbol = state.var_get(id).unwrap();
+                writeln!(code, r#";; {id} = {symbol}"#);
+                writeln!(code, r#"mov {}, {symbol}"#, self.scratch_name(expr.node.reg));
+            }
+            ExpressionKind::LiteralBoolean(_) => todo!(),
+            ExpressionKind::LiteralCharacter(_) => todo!(),
+            ExpressionKind::BinaryOpAdd => {
+                let left = expr.left.as_mut().unwrap().as_mut();
+                let right = expr.right.as_mut().unwrap().as_mut();
+                self.codegen_expr(state, left, code);
+                self.codegen_expr(state, right, code);
+                let l = left.node.reg;
+                let r = right.node.reg;
+
+                writeln!(code, r#"add {}, {}"#, self.scratch_name(l), self.scratch_name(r));
+                self.scratch_free(r);
+                expr.node.reg = l;
+            }
+            ExpressionKind::BinaryOpLower => {
+                let left = expr.left.as_mut().unwrap().as_mut();
+                let right = expr.right.as_mut().unwrap().as_mut();
+                self.codegen_expr(state, left, code);
+                self.codegen_expr(state, right, code);
+                let l = left.node.reg;
+                let r = right.node.reg;
+
+                writeln!(code, r#"cmp {}, {}"#, self.scratch_name(l), self.scratch_name(r));
+                self.scratch_free(r);
+            }
+            ExpressionKind::BinaryOpSub => todo!(),
+            ExpressionKind::BinaryOpMul => todo!(),
+            ExpressionKind::BinaryOpDiv => todo!(),
+            ExpressionKind::UnaryOpNeg => todo!(),
+            ExpressionKind::UnaryOpNot => todo!(),
+            ExpressionKind::BinaryOpArrayAccess => todo!(),
+            ExpressionKind::FuncCall => todo!(),
+            ExpressionKind::FuncArg => todo!(),
+            ExpressionKind::BinaryOpAssignment => {
+                let left = expr.left.as_mut().unwrap().as_mut();
+                let right = expr.right.as_mut().unwrap().as_mut();
+                self.codegen_expr(state, right, code);
+                let r = right.node.reg;
+                println!("r: {r}");
+                writeln!(
+                    code,
+                    r#"mov {}, {}"#,
+                    &self.scratch_name(r),
+                    state.var_get(&left.name).unwrap(),
+                );
+                println!("VARS: {:?}", state.vars);
+                println!("STRS: {:?}", state.strs);
+                println!("REGS: {:?}", self.regs);
+                state.var_insert(&left.name, &self.scratch_name(r));
+            }
+        }
+    }
+
+    fn codegen_print(&mut self, state: &mut IrState, exprs: &mut Vec<Expression>, code: &mut String) {
+        for expr in exprs {
+            writeln!(code, r#";; PRINT {:?}"#, expr.kind);
+            // save "CALLER" registers (https://web.stanford.edu/class/archive/cs/cs107/cs107.1174/guide_x86-64.html)
+            writeln!(code, r#"push rcx"#);
+            writeln!(code, r#"push rdx"#);
+            writeln!(code, r#"push r8"#);
+            writeln!(code, r#"push r9"#);
+            writeln!(code, r#"push r10"#);
+            writeln!(code, r#"push r11"#);
+
+            match &expr.kind {
+                ExpressionKind::LiteralInteger(i) => {}
+                ExpressionKind::LiteralString(s) => {
+                    let str_label = format!("str_{}", state.strs.len());
+                    state.str_insert(s, &str_label);
+
+                    writeln!(code, r#"mov rdi, fmt_string"#);
+                    writeln!(code, r#"mov rsi, {}"#, str_label);
+                    writeln!(code, r#"call printf"#);
+                }
+                ExpressionKind::Identifier(id) => {
+                    let s = state.var_get(id).unwrap();
+                    writeln!(code, r#";; {id} = {s}"#);
+                    writeln!(code, r#"mov rdi, fmt_int"#);
+                    writeln!(code, r#"mov rsi, {s}"#);
+                    writeln!(code, r#"call printf"#);
+                }
+                ExpressionKind::LiteralBoolean(_) => todo!(),
+                ExpressionKind::LiteralCharacter(_) => todo!(),
+                ExpressionKind::BinaryOpAdd => todo!(),
+                ExpressionKind::BinaryOpSub => todo!(),
+                ExpressionKind::BinaryOpMul => todo!(),
+                ExpressionKind::BinaryOpDiv => todo!(),
+                ExpressionKind::UnaryOpNeg => todo!(),
+                ExpressionKind::UnaryOpNot => todo!(),
+                ExpressionKind::BinaryOpArrayAccess => todo!(),
+                ExpressionKind::FuncCall => todo!(),
+                ExpressionKind::FuncArg => todo!(),
+                ExpressionKind::BinaryOpAssignment => todo!(),
+                ExpressionKind::BinaryOpLower => todo!(),
+            }
+
+            // restore registers
+            writeln!(code, r#"pop r11"#);
+            writeln!(code, r#"pop r10"#);
+            writeln!(code, r#"pop r9"#);
+            writeln!(code, r#"pop r8"#);
+            writeln!(code, r#"pop rdx"#);
+            writeln!(code, r#"pop rcx"#);
+        }
+    }
+
+    fn codegen_return(&mut self, state: &mut IrState, r: &mut Expression, code: &mut String) {
+        self.codegen_expr(state, r, code);
+
+        writeln!(code, r#"mov rdi, 0"#);
+        writeln!(code, r#"call exit"#);
+        writeln!(code);
+    }
+
+    // for now loops only support for-like loops where the condition is checked ad the begining of
+    // every loop and there is an inconditional jump to the begining of the loop
+    fn codegen_loop(&mut self, state: &mut IrState, l: &mut Loop, code: &mut String) {
+        let Loop {
+            init_expr_opt,
+            control_expr_opt,
+            next_expr_opt,
+            loop_body,
+        } = l;
+        let label_begin = self.label_create();
+        let label_end = self.label_create();
+
+        // initialize variables if an init expression exists
+        if let Some(expr) = init_expr_opt.as_mut() {
+            self.codegen_expr(state, expr, code);
+        }
+        // add the jump label at the beginning of the loop
+        writeln!(code, r#"{}:"#, self.label_name(label_begin));
+        if let Some(expr) = control_expr_opt.as_mut() {
+            self.codegen_expr(state, expr, code);
+            // conditional jump to break the loop, for now only if not equal to zero
+            writeln!(code, r#"jnz {}"#, self.label_name(label_end));
+        }
+        for stmt in loop_body {
+            self.codegen_stmt(state, stmt, code)
+        }
+        if let Some(expr) = next_expr_opt.as_mut() {
+            self.codegen_expr(state, expr, code);
+        }
+        // inconditional jump to the beginning of the loop
+        writeln!(code, r#"jmp {}"#, self.label_name(label_begin));
+        writeln!(code, r#"{}:"#, self.label_name(label_end));
+    }
+
+    fn codegen_assign(&mut self, state: &mut IrState, a: &mut Assignment, code: &mut String) {
+        let Assignment { name, val } = a;
+        writeln!(code, r#";; {name} = {}"#, val.name);
+        self.codegen_expr(state, val, code);
+        let val_reg = val.node.reg;
+        let assign_dest = state.var_get(name).unwrap();
+        self.scratch_free(val_reg);
+    }
+}
+// --- ---

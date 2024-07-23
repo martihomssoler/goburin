@@ -3,6 +3,10 @@ use std::os::unix::fs::FileTypeExt;
 
 impl TokenList {
     pub fn p1_0_parse(self) -> Result<Ast, String> {
+        for t in &self.tokens {
+            print!("{t}\t");
+        }
+        println!();
         p_parse(self.tokens)
     }
 }
@@ -43,8 +47,16 @@ fn parse_program(tokens: &[Token<TokenKind>], errors: &mut Vec<String>) -> Resul
             TokenKind::Eof => break,
             _ => {
                 errors.push(format!(
-                    "[parse_program] Unexpected token {:?} at line {} and col {}",
-                    token.kind, token.line, token.col
+                    "[parse_program] Unexpected token {:?} at line {} and col {}.\n\tTokens: {:?}",
+                    token.kind,
+                    token.line,
+                    token.col,
+                    tokens
+                        .iter()
+                        .skip(idx - 3)
+                        .take(6)
+                        .map(|t| t.kind.to_string())
+                        .collect::<Vec<_>>()
                 ));
                 continue;
             }
@@ -72,10 +84,10 @@ fn parse_definition(id: &Identifier, tokens: &[Token<TokenKind>], idx: &mut usiz
 }
 
 fn parse_definition_value(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<DefinitionValue, String> {
-    let mut statements = Vec::new();
     // open braces
     consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceLeft))?;
     // parse statements
+    let mut statements = Vec::new();
     while *idx < tokens.len()
         && !matches!(
             tokens[*idx].kind,
@@ -105,7 +117,8 @@ fn parse_statement(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<State
                 consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
                 stmt
             }
-            _ => todo!(),
+            Keyword::For => parse_statement_for(tokens, idx)?,
+            _ => todo!("{kw:?}"),
         },
         TokenKind::Value(v) => match v {
             Value::Constant(c) => {
@@ -113,10 +126,23 @@ fn parse_statement(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<State
                 consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
                 stmt
             }
-            Value::Identifier(id) => Statement::Declaration(parse_declaration(id.0.clone(), tokens, idx)?),
+            Value::Identifier(id) => {
+                // is the statement an assignment? then there must be an equal sign.
+                if consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Equal)).is_ok() {
+                    let stmt = Statement::Assignment({
+                        let name = id.0.clone();
+                        let expr = parse_expression(tokens, idx)?;
+                        Assignment { name, val: expr }
+                    });
+                    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+                    stmt
+                } else {
+                    Statement::Declaration(parse_declaration(id.0.clone(), tokens, idx)?)
+                }
+            }
         },
         TokenKind::Eof => return Err("Encountered EOF while parsing a statement.".to_owned()),
-        _ => return Err(format!("[parser_statement] Unexpected token {token_kind:?}.")),
+        _ => return Err(format!("[parse_statement] Unexpected token {token_kind:?}.")),
     };
 
     Ok(stmt)
@@ -143,28 +169,40 @@ fn parse_statement_print(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result
     Ok(Statement::Print(exprs))
 }
 
-fn parse_expression(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Expression, String> {
-    let val = consume_value(tokens, idx)?;
-    Ok(from_token_value_to_expression(val))
+fn parse_statement_for(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Statement, String> {
+    // for (init; cond; next) { body }
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::ParenthesisLeft))?;
+    let init_expr = parse_expression(tokens, idx)?;
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+    let control_expr = parse_expression(tokens, idx)?;
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::Semicolon))?;
+    let next_expr = parse_expression(tokens, idx)?;
+    consume(
+        true,
+        &tokens[*idx],
+        idx,
+        TokenKind::Operator(Operator::ParenthesisRight),
+    )?;
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceLeft))?;
+    let mut statements = Vec::new();
+    while *idx < tokens.len()
+        && !matches!(
+            tokens[*idx].kind,
+            TokenKind::Operator(Operator::BraceRight) | TokenKind::Eof
+        )
+    {
+        let statement = parse_statement(tokens, idx)?;
+        statements.push(statement);
+    }
+    consume(true, &tokens[*idx], idx, TokenKind::Operator(Operator::BraceRight))?;
+    Ok(Statement::Loop(Loop {
+        init_expr_opt: Some(init_expr),
+        control_expr_opt: Some(control_expr),
+        next_expr_opt: Some(next_expr),
+        loop_body: statements,
+    }))
 }
 
-// TokenKind::Keyword(kw) => match kw {
-//     Keyword::Return => {
-//         todo!()
-//     }
-//     Keyword::Print => {
-//     }
-//     _ => {
-//         unimplemented!("Keyword {kw:?} not supported yet!")
-//     }
-// },
-// TokenKind::Type(_) | TokenKind::Operator(_) | TokenKind::Value(_) => {
-//     errors.push(format!(
-//         "Unexpected token {:?} at line {} and col {}",
-//         token.kind, token.line, token.col
-//     ));
-//     continue;
-// }
 /// name : type = value;
 fn parse_declaration(name: String, tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Declaration, String> {
     // colon
@@ -217,6 +255,120 @@ fn parse_declaration(name: String, tokens: &[Token<TokenKind>], idx: &mut usize)
     })
 }
 
+fn parse_expression(tokens: &[Token<TokenKind>], idx: &mut usize) -> Result<Expression, String> {
+    // let val = consume_value(tokens, idx)?;
+    // Ok(from_token_value_to_expression(val))
+    parse_expression_bindpow(tokens, idx, 0)
+}
+
+fn parse_expression_bindpow(tokens: &[Token<TokenKind>], idx: &mut usize, bind_pow: u8) -> Result<Expression, String> {
+    let t = &tokens[*idx];
+
+    let mut left = match &t.kind {
+        // TokenKind::Operator(op) if prefix_bind_pow(&op).is_some() => {
+        //     let (_, right_bind_pow) = prefix_bind_pow(&op).unwrap();
+        //     let expr = parse_expression_bindpow(tokens, idx, right_bind_pow)?;
+        //     Expression::Operation(op, vec![expr])
+        // }
+        // TokenKind::LeftParenthesis => {
+        //     let expr = parse_expr(token_iter, 0)?;
+        //     consume(token_iter, TokenKind::RightParenthesis)?;
+        //     Expr::Parenthesis(Box::new(expr))
+        // }
+        TokenKind::Value(_) => {
+            let val = consume_value(tokens, idx)?;
+            from_token_value_to_expression(val)
+        }
+        TokenKind::Keyword(_) | TokenKind::Type(_) | TokenKind::Eof => todo!(),
+        TokenKind::Operator(op) => todo!(),
+    };
+
+    while *idx < tokens.len() {
+        let op = match &tokens[*idx].kind {
+            TokenKind::Operator(Operator::Comma | Operator::Semicolon | Operator::ParenthesisRight) => break,
+            TokenKind::Operator(op) => op,
+            t => {
+                todo!("{t} : {:?}", tokens.iter().skip(*idx - 2).take(4).collect::<Vec<_>>())
+            }
+        };
+
+        if let Some((left_bind_pow, _)) = postfix_bind_pow(op) {
+            if left_bind_pow < bind_pow {
+                break;
+            }
+            continue;
+        }
+        if let Some((left_bind_pow, right_bind_pow)) = infix_bind_pow(op) {
+            if (left_bind_pow < bind_pow) {
+                break;
+            }
+
+            *idx += 1;
+            let right = parse_expression_bindpow(tokens, idx, right_bind_pow)?;
+            left = Expression {
+                name: "mock".to_owned(),
+                kind: match op {
+                    Operator::Equal => ExpressionKind::BinaryOpAssignment,
+                    Operator::Plus => ExpressionKind::BinaryOpAdd,
+                    Operator::Lower => ExpressionKind::BinaryOpLower,
+                    _ => todo!("{op:?}"),
+                },
+                node: AstNode {
+                    token: tokens[*idx].clone(),
+                    symbol: None,
+                    reg: u32::MAX,
+                },
+                left: Some(Box::new(left)),
+                right: Some(Box::new(right)),
+            };
+            continue;
+        }
+
+        break;
+    }
+
+    Ok(left)
+}
+
+/// TODO(mhs): shamelessly stolen from odin-lang at (https://odin-lang.org/docs/overview/#operator-precedence)
+/// and adapted to our needs with the following rule in mind
+/// we use and odd number for the bare priority and bump it up by one for associativity
+/// Bind Power      Operator
+///     15          unary operations
+///     13          *   /   %   %%   &   &~  <<   >>
+///     11          +   -   |   ~    in  not_in
+///      9          ==  !=  <   >    <=  >=
+///      7          &&
+///      5          ||
+///      3          ..=    ..<
+///      1          or_else  =  ?    if  when
+
+// TODO: make a single function for the binding powers
+fn postfix_bind_pow(op: &Operator) -> Option<(u8, ())> {
+    None
+}
+
+fn prefix_bind_pow(op: &Operator) -> Option<((), u8)> {
+    let res = match op {
+        Operator::Plus | Operator::Minus => ((), 15),
+        Operator::Equal => return None,
+        _ => panic!("bad prefix op: {op:?}"),
+    };
+
+    Some(res)
+}
+
+fn infix_bind_pow(op: &Operator) -> Option<(u8, u8)> {
+    let res = match op {
+        Operator::Plus | Operator::Minus => (11, 12),
+        Operator::Star | Operator::Slash => (13, 14),
+        Operator::Greater | Operator::Lower => (9, 10),
+        Operator::Equal => (1, 2), // TODO(mhs): is equal right associative?
+        _ => panic!("bad prefix op: {op:?}"),
+    };
+    Some(res)
+}
+
 fn from_token_value_to_expression(val: Token<Value>) -> Expression {
     let node = AstNode::from_token_value(&val);
     match val.kind {
@@ -239,7 +391,7 @@ fn from_token_value_to_expression(val: Token<Value>) -> Expression {
             },
         },
         Value::Identifier(id) => Expression {
-            name: "Identifier".to_string(),
+            name: id.0.to_string(),
             kind: ExpressionKind::Identifier(id.0),
             left: None,
             right: None,
@@ -405,212 +557,3 @@ fn consume(strict: bool, actual: &Token<TokenKind>, idx: &mut usize, expected: T
         ))
     }
 }
-
-// fn parse_stmt(token_iter: &mut TokenIter) -> CompilerResult<Stmt> {
-//     if let Some(t) = token_iter.next() {
-//         match t.kind {
-//             TokenKind::Keyword(k) => match k {
-//                 Keyword::Return => {
-//                     let expr = parse_expr(token_iter, 0)?;
-//                     consume(token_iter, TokenKind::Semicolon)?;
-//                     Ok(Stmt::Return(expr))
-//                 }
-//                 Keyword::Print => {
-//                     consume(token_iter, TokenKind::LeftParenthesis)?;
-//                     let expr = parse_expr(token_iter, 0)?;
-//                     consume(token_iter, TokenKind::RightParenthesis)?;
-//                     consume(token_iter, TokenKind::Semicolon)?;
-//                     Ok(Stmt::Print(expr))
-//                 }
-//                 Keyword::Const => {
-//                     let (ident, expr_opt) = parse_declaration(token_iter)?;
-//                     Ok(Stmt::Let(ident, expr_opt))
-//                 }
-//                 Keyword::Mut => {
-//                     let (ident, expr_opt) = parse_declaration(token_iter)?;
-//                     Ok(Stmt::Mut(ident, expr_opt))
-//                 }
-//                 Keyword::Let => {
-//                     let (ident, expr_opt) = parse_declaration(token_iter)?;
-//                     Ok(Stmt::Let(ident, expr_opt))
-//                 }
-//                 Keyword::For => {
-//                     let condition_expr = parse_expr(token_iter, 0)?;
-//                     consume(token_iter, TokenKind::LeftParenthesis)?;
-//                     let mut stmts = Vec::new();
-//                     while let Some(t) = token_iter.peek()
-//                         && !t.kind.eq(&TokenKind::RightParenthesis)
-//                     {
-//                         let stmt = parse_stmt(token_iter)?;
-//                         stmts.push(stmt);
-//                     }
-//                     consume(token_iter, TokenKind::RightParenthesis)?;
-//                     Ok(Stmt::For(condition_expr, stmts))
-//                 }
-//             },
-//             // id = ?;
-//             TokenKind::Identifier(id)
-//                 if token_iter
-//                     .peek()
-//                     .map(|t| t.kind == TokenKind::Operator(Operator::Equal))
-//                     .unwrap_or(false) =>
-//             {
-//                 consume(token_iter, TokenKind::Operator(Operator::Equal))?;
-//                 let expr = parse_expr(token_iter, 0)?;
-//                 consume(token_iter, TokenKind::Semicolon)?;
-//                 Ok(Stmt::Assignment(id, expr))
-//             }
-//             // id[?]
-//             TokenKind::Identifier(id)
-//                 if token_iter
-//                     .peek()
-//                     .map(|t| t.kind == TokenKind::LeftBracket)
-//                     .unwrap_or(false) =>
-//             {
-//                 consume(token_iter, TokenKind::LeftBracket)?;
-//                 let expr = parse_expr(token_iter, 0)?;
-//                 consume(token_iter, TokenKind::RightBracket)?;
-//                 Ok(Stmt::ArrayIndexing(id, expr))
-//             }
-//             TokenKind::Identifier(_)
-//             | TokenKind::Integer(_)
-//             | TokenKind::String(_)
-//             | TokenKind::Operator(_)
-//             | TokenKind::Colon
-//             | TokenKind::Semicolon
-//             | TokenKind::LeftParenthesis
-//             | TokenKind::RightParenthesis
-//             | TokenKind::LeftBracket
-//             | TokenKind::RightBracket
-//             | TokenKind::EOF => {
-//                 let expr = parse_expr(token_iter, 0)?;
-//                 consume(token_iter, TokenKind::Semicolon)?;
-//                 Ok(Stmt::Expr(expr))
-//             }
-//         }
-//     } else {
-//         // TODO: improve errors
-//         Err(CompilerError::Generic(
-//             "calling parse_stmt with empty iterator".to_owned(),
-//         ))
-//     }
-// }
-
-// fn parse_declaration(token_iter: &mut TokenIter) -> Result<(String, Option<Expr>), CompilerError> {
-//     let TokenKind::Identifier(id) = consume(token_iter, TokenKind::Identifier(String::new()))?.kind
-//     else {
-//         panic!("The token should be an identifier");
-//     };
-//     let mut expr_opt = None;
-//     if consume(token_iter, TokenKind::Colon).is_ok() {
-//         consume(token_iter, TokenKind::Operator(Operator::Equal))?;
-//         expr_opt = Some(parse_expr(token_iter, 0)?);
-//     };
-//     consume(token_iter, TokenKind::Semicolon)?;
-//     Ok((id, expr_opt))
-// }
-
-// fn parse_expr(token_iter: &mut TokenIter, bind_pow: u8) -> CompilerResult<Expr> {
-//     let Some(t) = token_iter.next() else {
-//         // TODO: improve errors
-//         return Err(CompilerError::Generic(
-//             "calling parse_expr with empty iterator".to_owned(),
-//         ));
-//     };
-
-//     let mut left = match t.kind {
-//         TokenKind::Operator(op) if let Some((_, right_bind_pow)) = prefix_bind_pow(&op) => {
-//             let expr = parse_expr(token_iter, right_bind_pow)?;
-//             Expr::Operation(op, vec![expr])
-//         }
-//         TokenKind::LeftParenthesis => {
-//             let expr = parse_expr(token_iter, 0)?;
-//             consume(token_iter, TokenKind::RightParenthesis)?;
-//             Expr::Parenthesis(Box::new(expr))
-//         }
-//         TokenKind::Integer(i) => Expr::Atom(Atom::Constant(Constant::Integer(i))),
-//         TokenKind::String(s) => Expr::Atom(Atom::String(s)),
-//         TokenKind::Identifier(id) => Expr::Atom(Atom::Identifier(id)),
-//         t => {
-//             panic!("wrong token {t}")
-//         }
-//     };
-
-//     loop {
-//         let Some(t) = token_iter.peek() else {
-//             // TODO: improve errors
-//             return Err(CompilerError::Generic(
-//                 "calling parse_expr with empty iterator".to_owned(),
-//             ));
-//         };
-
-//         let op = match &t.kind {
-//             TokenKind::Operator(op) => op,
-//             _ => break,
-//         };
-
-//         // now that we know that the `op` is a correct operator, we call next and clone.
-//         let op = op.clone();
-
-//         if let Some((left_bind_pow, _)) = postfix_bind_pow(&op) {
-//             if left_bind_pow < bind_pow {
-//                 break;
-//             }
-
-//             continue;
-//         }
-//         if let Some((left_bind_pow, right_bind_pow)) = infix_bind_pow(&op) {
-//             if (left_bind_pow < bind_pow) {
-//                 break;
-//             }
-
-//             token_iter.next();
-//             let right = parse_expr(token_iter, right_bind_pow)?;
-//             left = Expr::Operation(op, vec![left, right]);
-//             continue;
-//         }
-
-//         break;
-//     }
-
-//     Ok(left)
-// }
-
-// /// TODO(mhs): shamelessly stolen from odin-lang at (https://odin-lang.org/docs/overview/#operator-precedence)
-// /// and adapted to our needs with the following rule in mind
-// /// we use and odd number for the bare priority and bump it up by one for associativity
-// /// Bind Power      Operator
-// ///     15          unary operations
-// ///     13          *   /   %   %%   &   &~  <<   >>
-// ///     11          +   -   |   ~    in  not_in
-// ///      9          ==  !=  <   >    <=  >=
-// ///      7          &&
-// ///      5          ||
-// ///      3          ..=    ..<
-// ///      1          or_else  =  ?    if  when
-
-// // TODO: make a single function for the binding powers
-// fn postfix_bind_pow(op: &Operator) -> Option<(u8, ())> {
-//     None
-// }
-
-// fn prefix_bind_pow(op: &Operator) -> Option<((), u8)> {
-//     let res = match op {
-//         Operator::Plus | Operator::Minus => ((), 15),
-//         Operator::Equal => return None,
-//         _ => panic!("bad prefix op: {op:?}"),
-//     };
-
-//     Some(res)
-// }
-
-// fn infix_bind_pow(op: &Operator) -> Option<(u8, u8)> {
-//     let res = match op {
-//         Operator::Plus | Operator::Minus => (11, 12),
-//         Operator::Star | Operator::Slash => (13, 14),
-//         Operator::Greater | Operator::Lower => (9, 10),
-//         Operator::Equal => (1, 2), // TODO(mhs): is equal right associative?
-//         _ => panic!("bad prefix op: {op:?}"),
-//     };
-//     Some(res)
-// }
