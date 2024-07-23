@@ -72,6 +72,26 @@ pub struct X86_64 {
 }
 
 impl X86_64 {
+    /// | Register | Conventional use                |
+    /// | -------- | ------------------------------- |
+    /// | %rax     | Return value, caller-saved      |
+    /// | %rdi     | 1st argument, caller-saved      |
+    /// | %rsi     | 2nd argument, caller-saved      |
+    /// | %rdx     | 3rd argument, caller-saved      |
+    /// | %rcx     | 4th argument, caller-saved      |
+    /// | %r8      | 5th argument, caller-saved      |
+    /// | %r9      | 6th argument, caller-saved      |
+    /// | %r10     | Scratch/temporary, caller-saved |
+    /// | %r11     | Scratch/temporary, caller-saved |
+    /// | %rsp     | Stack pointer, callee-saved     |
+    /// | %rbx     | Local variable, callee-saved    |
+    /// | %rbp     | Local variable, callee-saved    |
+    /// | %r12     | Local variable, callee-saved    |
+    /// | %r13     | Local variable, callee-saved    |
+    /// | %r14     | Local variable, callee-saved    |
+    /// | %r15     | Local variable, callee-saved    |
+    ///
+    /// [link](https://web.stanford.edu/class/archive/cs/cs107/cs107.1174/guide_x86-64.html)
     const SCRATCH_REGS: [&'static str; 10] = ["rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
 }
 
@@ -157,7 +177,6 @@ impl Target for X86_64 {
 impl X86_64 {
     fn codegen_definition(&mut self, ir: &mut Ir, code: &mut String) {
         for def in &mut ir.program {
-            println!("DEF: {:?}", def.id);
             match &mut def.val {
                 DefinitionValue::FunctionBody(stmts) => {
                     for stmt in stmts {
@@ -263,16 +282,12 @@ impl X86_64 {
                 let right = expr.right.as_mut().unwrap().as_mut();
                 self.codegen_expr(state, right, code);
                 let r = right.node.reg;
-                println!("r: {r}");
                 writeln!(
                     code,
                     r#"mov {}, {}"#,
                     &self.scratch_name(r),
                     state.var_get(&left.name).unwrap(),
                 );
-                println!("VARS: {:?}", state.vars);
-                println!("STRS: {:?}", state.strs);
-                println!("REGS: {:?}", self.regs);
                 state.var_insert(&left.name, &self.scratch_name(r));
             }
         }
@@ -281,7 +296,7 @@ impl X86_64 {
     fn codegen_print(&mut self, state: &mut IrState, exprs: &mut Vec<Expression>, code: &mut String) {
         writeln!(code, r#";; print start"#);
         for expr in exprs {
-            // save "CALLER" registers (https://web.stanford.edu/class/archive/cs/cs107/cs107.1174/guide_x86-64.html)
+            // save "CALLER" registers
             writeln!(code, r#"push rcx"#);
             writeln!(code, r#"push rdx"#);
             writeln!(code, r#"push r8"#);

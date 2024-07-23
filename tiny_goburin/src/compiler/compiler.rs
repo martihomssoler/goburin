@@ -26,18 +26,30 @@ use std::path::{Path, PathBuf};
 /// typechecking, belong here.
 /// * Stage 2 - `"p2_*"` => output: [`IR`]. Home to some of the earlier optimizations.
 /// * Stage 3 - `"p2_*"` => output: [`binary`]. Target dependant code generation.
-pub fn c_compile_file(file_path: PathBuf) -> Result<(), String> {
-    SourceFile::new(&file_path)?
-        // Stage 0
-        .p0_0_tokenize()?
-        // Stage 1
-        .p1_0_parse()?
-        .p1_1_name_resolution()?
-        .p1_2_static_type_checking()?
-        // Stage 2
-        .p2_0_ir()?
-        // Stage 3
-        .p3_0_codegen(&file_path, &mut X86_64::default())?; // comment
+pub fn c_compile_file(stage: u32, input: PathBuf, output: PathBuf) -> Result<(), String> {
+    // Stage 0
+    let s0 = SourceFile::new(&input)?.p0_0_tokenize()?;
+    if stage == 0 {
+        s0.save(output);
+        return Ok(());
+    }
+
+    // Stage 1
+    let s1 = s0.p1_0_parse()?.p1_1_name_resolution()?.p1_2_static_type_checking()?;
+    if stage == 1 {
+        s1.save(output);
+        return Ok(());
+    }
+
+    // Stage 2
+    let s2 = s1.p2_0_ir()?;
+    if stage == 2 {
+        s2.save(output);
+        return Ok(());
+    }
+
+    // Stage 3
+    s2.p3_0_codegen(&input, &mut X86_64::default())?;
 
     Ok(())
 }
@@ -146,6 +158,9 @@ impl SymbolTable {
 pub struct Ast {
     pub program: Vec<Definition>,
     pub symbol_table: SymbolTable,
+}
+impl Ast {
+    fn save(&self, output: PathBuf) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -545,6 +560,9 @@ fn print_tokens(tokens: &[Token<TokenKind>]) {
 pub struct Ir {
     pub program: Vec<Definition>,
     pub state: IrState,
+}
+impl Ir {
+    fn save(&self, output: PathBuf) {}
 }
 
 pub struct IrState {

@@ -3,10 +3,6 @@ use std::os::unix::fs::FileTypeExt;
 
 impl TokenList {
     pub fn p1_0_parse(self) -> Result<Ast, String> {
-        for t in &self.tokens {
-            print!("{t}\t");
-        }
-        println!();
         p_parse(self.tokens)
     }
 }

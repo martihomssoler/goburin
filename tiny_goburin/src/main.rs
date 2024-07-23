@@ -13,19 +13,69 @@ use compiler::c_compile_file;
 use std::{env, path::PathBuf};
 
 fn main() -> Result<(), String> {
-    let mut args = env::args();
+    let mut args: Vec<_> = env::args().collect();
     let count = args.len();
     match count {
-        2 => {
-            c_compile_file(args.nth(1).unwrap().into())?;
+        c if c < 2 || args[1] == FLAG_HELP_ABBR || args[1] == FLAG_HELP => {
+            println!("Goburin's Compiler");
+            println!();
+            usage();
+        }
+        4 if ACCEPTED_COMMANDS.contains(&args[1].as_str()) => {
+            let stage = match args[1].as_str() {
+                // I know u32 is overkill and that u8 would pbbly be enough but YOLO
+                // I've used 3 bytes more than necessary, sue me
+                FLAG_ALL | FLAG_ALL_ABBR => u32::MAX,
+                FLAG_TOKEN | FLAG_TOKEN_ABBR => 1,
+                FLAG_PARSE | FLAG_PARSE_ABBR => 2,
+                FLAG_CODEGEN | FLAG_CODEGEN_ABBR => 3,
+                f => panic!("Wrong flag {f:?}."),
+            };
+            let input = args[2].clone().into();
+            let output = args[3].clone().into();
+            c_compile_file(stage, input, output)?;
         }
         _ => {
-            println!("Error: Wrong number of arguments provided.");
-            println!("Usage: cargo run --[script]");
+            println!("[ ERROR ]: Wrong number of arguments provided.");
+            println!();
+            usage();
         }
     }
 
     Ok(())
+}
+
+const FLAG_ALL_ABBR: &str = "-a";
+const FLAG_CODEGEN_ABBR: &str = "-c";
+const FLAG_PARSE_ABBR: &str = "-p";
+const FLAG_TOKEN_ABBR: &str = "-t";
+const FLAG_HELP_ABBR: &str = "-h";
+const FLAG_ALL: &str = "--all";
+const FLAG_CODEGEN: &str = "--codegen";
+const FLAG_PARSE: &str = "--parse";
+const FLAG_TOKEN: &str = "--token";
+const FLAG_HELP: &str = "--help";
+
+const ACCEPTED_COMMANDS: [&str; 8] = [
+    FLAG_ALL_ABBR,
+    FLAG_CODEGEN_ABBR,
+    FLAG_PARSE_ABBR,
+    FLAG_TOKEN_ABBR,
+    FLAG_ALL,
+    FLAG_CODEGEN,
+    FLAG_PARSE,
+    FLAG_TOKEN,
+];
+
+fn usage() {
+    println!("Usage: gbc [COMMAND] <INPUT> <OUTPUT>");
+    println!();
+    println!("Commands:");
+    println!("  {FLAG_ALL_ABBR}, {FLAG_ALL}\t\tRuns the entire compiler on <INPUT> and saves the emitted code into <OUTPUT>.");
+    println!("  {FLAG_CODEGEN_ABBR}, {FLAG_CODEGEN}\t\tRuns the lexer, parser and asm generation on <INPUT> and saves the assembly code into <OUTPUT>.");
+    println!("  {FLAG_PARSE_ABBR}, {FLAG_PARSE}\t\tRuns the lexer and parser on <INPUT> and saves the AST representation into <OUTPUT>.");
+    println!("  {FLAG_TOKEN_ABBR}, {FLAG_TOKEN}\t\tRuns the lexer on <INPUT> and saves the token representation into <OUTPUT>.");
+    println!("  {FLAG_HELP_ABBR}, {FLAG_HELP}\t\tPrints this help.");
 }
 
 #[cfg(test)]
@@ -55,7 +105,7 @@ pub mod tests {
                 };
 
                 println!("[[ COMPILING ]] => '{:}.gobo'", filename);
-                if let Err(err) = c_compile_file(test_path.clone()) {
+                if let Err(err) = c_compile_file(u32::MAX, test_path.clone(), filename.to_owned().into()) {
                     println!("{err}");
                     panic!();
                 }

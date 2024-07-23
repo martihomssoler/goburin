@@ -3,6 +3,9 @@ use super::*;
 pub struct TokenList {
     pub tokens: Vec<Token<TokenKind>>,
 }
+impl TokenList {
+    pub(crate) fn save(self, output: PathBuf) {}
+}
 
 impl SourceFile {
     pub fn p0_0_tokenize(self) -> Result<TokenList, String> {
