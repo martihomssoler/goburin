@@ -1,10 +1,18 @@
+use std::{fs::File, io::Write};
+
 use super::*;
 
 pub struct TokenList {
     pub tokens: Vec<Token<TokenKind>>,
 }
 impl TokenList {
-    pub(crate) fn save(self, output: PathBuf) {}
+    pub(crate) fn save(self, path: PathBuf) -> Result<(), String> {
+        let mut output = File::create(path).map_err(|err| err.to_string())?;
+        for t in &self.tokens {
+            writeln!(output, "{}", t.kind);
+        }
+        Ok(())
+    }
 }
 
 impl SourceFile {

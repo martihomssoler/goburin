@@ -26,31 +26,38 @@ use std::path::{Path, PathBuf};
 /// typechecking, belong here.
 /// * Stage 2 - `"p2_*"` => output: [`IR`]. Home to some of the earlier optimizations.
 /// * Stage 3 - `"p2_*"` => output: [`binary`]. Target dependant code generation.
-pub fn c_compile_file(stage: u32, input: PathBuf, output: PathBuf) -> Result<(), String> {
-    // Stage 0
-    let s0 = SourceFile::new(&input)?.p0_0_tokenize()?;
-    if stage == 0 {
-        s0.save(output);
-        return Ok(());
+pub fn c_compile_file(stage: u32, input_path: PathBuf, output_path: PathBuf) -> Result<(), String> {
+    let stage_0 = |path: &Path| -> Result<TokenList, String> {
+        SourceFile::new(path)?
+            //
+            .p0_0_tokenize()
+    };
+    let stage_1 = |tokens: TokenList| -> Result<Ast, String> {
+        tokens
+            //
+            .p1_0_parse()?
+            .p1_1_name_resolution()?
+            .p1_2_static_type_checking()
+    };
+    let stage_2 = |ast: Ast| -> Result<Ir, String> {
+        ast
+            //
+            .p2_0_ir()
+    };
+    let stage_3 = |ir: Ir| -> Result<(), String> {
+        ir
+            //
+            .p3_0_codegen(&input_path, &mut X86_64::default())
+    };
+
+    // Logic for saving the intermediate passes between stages
+    // apply one after the others and save at the end
+    match stage {
+        0 => stage_0(&input_path)?.save(output_path)?,
+        1 => stage_1(stage_0(&input_path)?)?.save(output_path),
+        2 => stage_2(stage_1(stage_0(&input_path)?)?)?.save(output_path),
+        s => stage_3(stage_2(stage_1(stage_0(&input_path)?)?)?)?,
     }
-
-    // Stage 1
-    let s1 = s0.p1_0_parse()?.p1_1_name_resolution()?.p1_2_static_type_checking()?;
-    if stage == 1 {
-        s1.save(output);
-        return Ok(());
-    }
-
-    // Stage 2
-    let s2 = s1.p2_0_ir()?;
-    if stage == 2 {
-        s2.save(output);
-        return Ok(());
-    }
-
-    // Stage 3
-    s2.p3_0_codegen(&input, &mut X86_64::default())?;
-
     Ok(())
 }
 

@@ -26,9 +26,9 @@ fn main() -> Result<(), String> {
                 // I know u32 is overkill and that u8 would pbbly be enough but YOLO
                 // I've used 3 bytes more than necessary, sue me
                 FLAG_ALL | FLAG_ALL_ABBR => u32::MAX,
-                FLAG_TOKEN | FLAG_TOKEN_ABBR => 1,
-                FLAG_PARSE | FLAG_PARSE_ABBR => 2,
-                FLAG_CODEGEN | FLAG_CODEGEN_ABBR => 3,
+                FLAG_TOKEN | FLAG_TOKEN_ABBR => 0,
+                FLAG_PARSE | FLAG_PARSE_ABBR => 1,
+                FLAG_CODEGEN | FLAG_CODEGEN_ABBR => 2,
                 f => panic!("Wrong flag {f:?}."),
             };
             let input = args[2].clone().into();
@@ -88,6 +88,9 @@ pub mod tests {
         process::{Command, ExitStatus, Stdio},
     };
 
+    /// Output files are organized in the following way:
+    /// The first line of the file must be parsed as an integer and is the expected StatusCode of the program
+    /// The rest of the file is the StdOut of the program
     #[test]
     fn goburin_compiler() -> std::io::Result<()> {
         let mut tests_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -99,10 +102,18 @@ pub mod tests {
                 let filename = test_path.file_stem().unwrap().to_str().unwrap();
 
                 let output_file = test_path.clone().with_extension("output");
-                let Ok(expected_output_content) = std::fs::read_to_string(output_file) else {
+                let Ok(output_file_content) = std::fs::read_to_string(output_file) else {
                     println!("ERROR --> Skipping '{filename}.gobo' : No '.output' file found for it",);
                     return Err(std::io::Error::last_os_error());
                 };
+                let expected_status_code = output_file_content
+                    .lines()
+                    .next()
+                    .expect("The output file should have as first line the status code of the program.")
+                    .parse::<i32>()
+                    .map_err(|err| format!("{err} : the status code of the program is expected to be an integer."))
+                    .unwrap();
+                let expected_output_content: String = output_file_content.lines().skip(1).collect();
 
                 println!("[[ COMPILING ]] => '{:}.gobo'", filename);
                 if let Err(err) = c_compile_file(u32::MAX, test_path.clone(), filename.to_owned().into()) {
@@ -120,7 +131,7 @@ pub mod tests {
                         .to_string();
                     println!("--> [ EXECUTING ERROR ] {command_error:?}");
                 }
-                assert_eq!(command_output.status, <ExitStatus as std::default::Default>::default());
+                assert_eq!(command_output.status.code(), Some(expected_status_code));
 
                 println!("--> [ Comparing execution with '{filename}.output' ]",);
                 let actual_output_content =
@@ -130,7 +141,7 @@ pub mod tests {
                 println!("--> [ Removing files '{:}' ]", filename);
                 let output = Command::new("rm")
                     .arg(filename)
-                    .arg(format!("{filename}.asm"))
+                    // .arg(format!("{filename}.asm"))
                     .arg(format!("{filename}.o"))
                     .current_dir(tests_dir.clone())
                     .status()

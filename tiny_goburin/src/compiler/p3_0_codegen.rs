@@ -107,10 +107,8 @@ impl Target for X86_64 {
 
         // code section
         writeln!(code, r#"section '.text' executable"#);
-        writeln!(code);
         // make start visible
         writeln!(code, r#"public _start"#);
-        writeln!(code);
         // declare external functions
         writeln!(code, r#"extrn printf"#);
         writeln!(code, r#"extrn exit"#);
@@ -349,7 +347,7 @@ impl X86_64 {
     fn codegen_return(&mut self, state: &mut IrState, r: &mut Expression, code: &mut String) {
         self.codegen_expr(state, r, code);
 
-        writeln!(code, r#"mov rdi, 0"#);
+        writeln!(code, r#"mov rdi, {}"#, self.scratch_name(r.node.reg));
         writeln!(code, r#"call exit"#);
         writeln!(code);
     }
