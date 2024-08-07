@@ -72,9 +72,93 @@ pub enum Instruction {
     SignalF,
 }
 
+impl Instruction {
+    pub fn serialize(&self) -> Vec<u8> {
+        match *self {
+            Instruction::Jmpr { offset } => vec![InstrOpCode::OpJmpr as u8, (offset.0 as u8) << 1],
+            Instruction::Jnzr { offset } => vec![InstrOpCode::OpJnzr as u8, (offset.0 as u8) << 1],
+            Instruction::Jzr { offset } => todo!(),
+            Instruction::Jmpa { r, s } => todo!(),
+            Instruction::Jnza { r, s } => todo!(),
+            Instruction::Jza { r, s } => todo!(),
+            Instruction::Cpy { r, s } => vec![InstrOpCode::OpCpy as u8 | ((r as u8 & 0x01) << 1), (s as u8) << 4 | (r as u8 & 0xFE)],
+            Instruction::Sto16 { offset } => todo!(),
+            Instruction::Sto8 { offset } => todo!(),
+            Instruction::St16 { r, s } => todo!(),
+            Instruction::St8 { r, s } => todo!(),
+            Instruction::Ld16a { value } => todo!(),
+            Instruction::Ld16b { value } => todo!(),
+            Instruction::Ld16c { value } => todo!(),
+            Instruction::Ld8a { value } => vec![InstrOpCode::OpLd8a as u8 | (value as u8 & 0x01) << 1, (value as u8 & 0xFE)],
+            Instruction::Ld8b { value } => todo!(),
+            Instruction::Ld8c { value } => todo!(),
+            Instruction::Ldo16 { offset } => todo!(),
+            Instruction::Ldo8 { offset } => todo!(),
+            Instruction::Ld16 { r, s } => todo!(),
+            Instruction::Ld8 { r, s } => todo!(),
+            Instruction::Add { r, s } => vec![InstrOpCode::OpAdd as u8 | (r as u8 & 0x01) << 1, (s as u8) << 4 | (r as u8 & 0xFE)],
+            Instruction::Addf { r, s } => todo!(),
+            Instruction::Sub { r, s } => todo!(),
+            Instruction::Subf { r, s } => todo!(),
+            Instruction::Mul { r, s } => todo!(),
+            Instruction::Mulf { r, s } => todo!(),
+            Instruction::Divs { r, s } => todo!(),
+            Instruction::Divu { r, s } => todo!(),
+            Instruction::Divf { r, s } => todo!(),
+            Instruction::Addi { r, val } => vec![InstrOpCode::OpAddi as u8 | (r as u8 & 0x01) << 1, (val.0 as u8) << 4 | (r as u8 & 0xFE)],
+            Instruction::Shl { r, s } => todo!(),
+            Instruction::Shr { r, s } => todo!(),
+            Instruction::Sha { r, s } => todo!(),
+            Instruction::Shli { r, val } => todo!(),
+            Instruction::Shri { r, val } => todo!(),
+            Instruction::Shai { r, val } => todo!(),
+            Instruction::Neg { r, s } => todo!(),
+            Instruction::And { r, s } => todo!(),
+            Instruction::Or { r, s } => todo!(),
+            Instruction::Xor { r, s } => todo!(),
+            Instruction::Ps16 { value } => todo!(),
+            Instruction::Ps8 { value } => todo!(),
+            Instruction::Pop16 => todo!(),
+            Instruction::Pop8 => todo!(),
+            Instruction::Ceq { r, s } => todo!(),
+            Instruction::Clt { r, s } => todo!(),
+            Instruction::Cle { r, s } => vec![InstrOpCode::OpCle as u8 | (r as u8 & 0x01) << 1, (s as u8) << 4 | (r as u8 & 0xFE)],
+            Instruction::Signal0 => vec![InstrOpCode::OpSignal0 as u8],
+            Instruction::Signal1 => vec![InstrOpCode::OpSignal1 as u8],
+            Instruction::Signal2 => todo!(),
+            Instruction::Signal3 => todo!(),
+            Instruction::Signal4 => todo!(),
+            Instruction::Signal5 => todo!(),
+            Instruction::Signal6 => todo!(),
+            Instruction::Signal7 => todo!(),
+            Instruction::Signal8 => todo!(),
+            Instruction::Signal9 => todo!(),
+            Instruction::SignalA => todo!(),
+            Instruction::SignalB => todo!(),
+            Instruction::SignalC => todo!(),
+            Instruction::SignalD => todo!(),
+            Instruction::SignalE => todo!(),
+            Instruction::SignalF => todo!(),
+        }
+    }
+}
+
+#[repr(u8)]
+pub enum InstrOpCode {
+    OpJmpr = 0x01,
+    OpJnzr = 0x11,
+    OpCpy = 0xC9,
+    OpLd8a = 0x6D,
+    OpAdd = 0x05,
+    OpAddi = 0xA5,
+    OpCle = 0xC5,
+    OpSignal0 = 0xD1,
+    OpSignal1 = 0xD3,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Imm7bit(pub i16);
+pub struct Imm7bit(pub i8);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct UImm4bit(pub u16);
+pub struct UImm4bit(pub u8);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SImm4bit(pub i16);
+pub struct SImm4bit(pub i8);

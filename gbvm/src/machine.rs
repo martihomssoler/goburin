@@ -1,69 +1,146 @@
-mod instruction;
-mod machine_tests;
+pub mod instruction;
+mod tests;
 
-use std::ops::{Add, Mul, Shl, Shr};
-
-use instruction::*;
+pub use instruction::*;
+use std::ops::{Add, Mul, Shr};
 
 const REGISTER_COUNT: usize = 16;
 const MEMORY_SIZE: usize = 1024;
 const STACK_SIZE: usize = 1024;
+const PROGRAM_SIZE: usize = 1024;
 const BASE_IP: u32 = 0x00000000;
 
 pub type VMResult<T> = Result<T, String>;
 
 pub struct Machine {
     registers: [u16; REGISTER_COUNT],
+    instructions: Box<dyn Memory>,
     memory: Box<dyn Memory>,
     stack: Box<dyn Memory>,
 }
 
+impl Default for Machine {
+    fn default() -> Self {
+        Self {
+            registers: [0; REGISTER_COUNT],
+            memory: Box::new(LinearMemory::new(MEMORY_SIZE)),
+            stack: Box::new(LinearMemory::new(STACK_SIZE)),
+            instructions: Box::new(LinearMemory::new(PROGRAM_SIZE)),
+        }
+    }
+}
+
 impl Machine {
-    pub fn new() -> Self {
-        Self { registers: [0; REGISTER_COUNT], memory: Box::new(LinearMemory::new(MEMORY_SIZE)), stack: Box::new(LinearMemory::new(STACK_SIZE)) }
+    pub fn new(program: &[Instruction]) -> VMResult<Self> {
+        let instr_bytes = program.iter().flat_map(|instr| instr.serialize()).collect::<Vec<_>>();
+        println!("Bytes: {instr_bytes:04X?}");
+        let mut instr_mem = LinearMemory::new(PROGRAM_SIZE);
+        instr_mem.write(0, &instr_bytes)?;
+        Ok(Self {
+            registers: [0; REGISTER_COUNT],
+            memory: Box::new(LinearMemory::new(MEMORY_SIZE)),
+            stack: Box::new(LinearMemory::new(STACK_SIZE)),
+            instructions: Box::new(instr_mem),
+        })
     }
 
-    pub fn step(&mut self) -> VMResult<()> {
+    pub fn step(&mut self) -> VMResult<Option<Signal>> {
         let addr = self.get_ip();
         let (instr, bytes_read) = self.fetch_and_decode(addr)?;
-        self.offset_ip(bytes_read as i16); // harmless cast since the nof bytes read will be lower than 128
-        self.execute_instr(instr)?;
-        Ok(())
+        println!("Instruction: {instr:?}");
+        self.print_state();
+        let (new_ip, _overflowed) = self.offset_ip(bytes_read as i16); // harmless cast since the nof bytes read will be lower than 128
+        self.set_ip((new_ip >> 16) as u16, new_ip as u16);
+        let signal = self.execute_instr(instr)?;
+        Ok(signal)
     }
+
+    pub fn get_register_value(&self, r: Register) -> u16 { self.registers[r] }
 
     fn fetch_and_decode(&mut self, addr: u32) -> VMResult<(Instruction, u16)> {
-        let mut bytes_read = 0;
-        let header = self.memory.read(addr, 1)?;
-        bytes_read += 1;
-        // FIXME(mhs): return the correct address
-        Ok((Instruction::Pop8, bytes_read))
+        let header = self.instructions.read(addr, 1)?[0];
+        let mut bytes_read = 1;
+
+        let instr = match header {
+            op if InstrOpCode::OpJmpr as u8 == op => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Jmpr { offset: Imm7bit((payload as i8) >> 1) }
+            }
+            op if InstrOpCode::OpJnzr as u8 == op => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Jnzr { offset: Imm7bit((payload as i8) >> 1) }
+            }
+            op if InstrOpCode::OpCpy as u8 == op & 0xFD => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Cpy { r: Register::from((payload & 0x0E) | ((header & 0x02) >> 1)), s: Register::from(payload >> 4) }
+            }
+            op if InstrOpCode::OpLd8a as u8 == op & 0xFD => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Ld8a { value: ((payload & 0x0E) | ((header & 0x02) >> 1)) as u16 }
+            }
+            op if InstrOpCode::OpAdd as u8 == op & 0xFD => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Add { r: Register::from((payload & 0x0E) | ((header & 0x02) >> 1)), s: Register::from(payload >> 4) }
+            }
+            op if InstrOpCode::OpAddi as u8 == op & 0xFD => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Addi { r: Register::from((payload & 0x0E) | ((header & 0x02) >> 1)), val: SImm4bit((payload as i8) >> 4) }
+            }
+            op if InstrOpCode::OpCle as u8 == op & 0xFD => {
+                let payload = self.instructions.read(addr + bytes_read, 1)?[0] & 0xFE;
+                bytes_read += 1;
+                Instruction::Cle { r: Register::from((payload & 0x0E) | ((header & 0x02) >> 1)), s: Register::from(payload >> 4) }
+            }
+            op if InstrOpCode::OpSignal0 as u8 == op => Instruction::Signal0,
+            op if InstrOpCode::OpSignal1 as u8 == op => Instruction::Signal1,
+            op => unimplemented!("Unknown instruction with opcode 0x{op:02X}"),
+        };
+
+        Ok((instr, bytes_read as u16))
     }
 
-    pub(crate) fn execute_instr(&mut self, instr: Instruction) -> VMResult<()> {
+    pub fn get_ip(&self) -> u32 { (self.registers[Register::IPhi] as u32) << 16 | (self.registers[Register::IPlo] as u32) }
+
+    #[inline(always)]
+    fn set_ip(&mut self, high: u16, low: u16) {
+        self.registers[Register::IPhi] = high;
+        self.registers[Register::IPlo] = low;
+    }
+
+    fn offset_ip(&mut self, offset: i16) -> (u32, bool) {
+        let ip = self.get_ip();
+        ip.overflowing_add_signed(offset as i32)
+    }
+
+    fn execute_instr(&mut self, instr: Instruction) -> VMResult<Option<Signal>> {
+        let mut signal = None;
         match instr {
             // Inconditional jump, modifying the Instruction Pointer (IP) by the offset amount.
             Instruction::Jmpr { offset } => {
                 // TODO(mhs): handle over/under-flowing case
-                let (new_ip, _overflowed) = self.offset_ip(offset.0);
-                self.registers[Register::IPlo] = new_ip as u16;
-                self.registers[Register::IPhi] = (new_ip >> 16) as u16;
+                let (new_ip, _overflowed) = self.offset_ip(offset.0 as i16);
+                self.set_ip((new_ip >> 16) as u16, new_ip as u16);
             }
             // If xC is not equal to 0, modify the Instruction Pointer (IP) by the offset amount.
             Instruction::Jnzr { offset } => {
                 if self.registers[Register::xC] != 0 {
                     // TODO(mhs): handle over/under-flowing case
-                    let (new_ip, _overflowed) = self.offset_ip(offset.0);
-                    self.registers[Register::IPlo] = new_ip as u16;
-                    self.registers[Register::IPhi] = (new_ip >> 16) as u16;
+                    let (new_ip, _overflowed) = self.offset_ip(offset.0 as i16);
+                    self.set_ip((new_ip >> 16) as u16, new_ip as u16);
                 }
             }
             // If xC is equal to 0, modify the Instruction Pointer (IP) by the offset amount.
             Instruction::Jzr { offset } => {
                 if self.registers[Register::xC] == 0 {
                     // TODO(mhs): handle over/under-flowing case
-                    let (new_ip, _overflowed) = self.offset_ip(offset.0);
-                    self.registers[Register::IPlo] = new_ip as u16;
-                    self.registers[Register::IPhi] = (new_ip >> 16) as u16;
+                    let (new_ip, _overflowed) = self.offset_ip(offset.0 as i16);
+                    self.set_ip((new_ip >> 16) as u16, new_ip as u16);
                 }
             }
             // Inconditional jump to an absolute address computed as R << 16 | S
@@ -187,10 +264,13 @@ impl Machine {
             }
             Instruction::Ceq { r, s } => self.registers[Register::xC] = (self.registers[r] == self.registers[s]) as u16,
             Instruction::Clt { r, s } => self.registers[Register::xC] = (self.registers[r] < self.registers[s]) as u16,
-            Instruction::Cle { r, s } => self.registers[Register::xC] = (self.registers[r] <= self.registers[s]) as u16,
+            Instruction::Cle { r, s } => {
+                self.registers[Register::xC] = (self.registers[r] <= self.registers[s]) as u16;
+                // println!("{} <= {} -> {}", self.registers[r], self.registers[s], self.get_register_value(Register::xC));
+            }
             // HALT signal
-            Instruction::Signal0 => (),
-            Instruction::Signal1 => todo!(),
+            Instruction::Signal0 => signal = Some(Signal::Halt),
+            Instruction::Signal1 => signal = Some(Signal::Print),
             Instruction::Signal2 => todo!(),
             Instruction::Signal3 => todo!(),
             Instruction::Signal4 => todo!(),
@@ -206,19 +286,32 @@ impl Machine {
             Instruction::SignalE => todo!(),
             Instruction::SignalF => todo!(),
         }
-        Ok(())
+        Ok(signal)
     }
 
-    fn get_ip(&self) -> u32 { (self.registers[Register::IPhi] as u32) << 16 | (self.registers[Register::IPlo] as u32) }
-
-    fn set_ip(&mut self, high: u16, low: u16) {
-        self.registers[Register::IPhi] = high;
-        self.registers[Register::IPlo] = low;
-    }
-
-    fn offset_ip(&mut self, offset: i16) -> (u32, bool) {
-        let ip = self.get_ip();
-        ip.overflowing_add_signed(offset as i32)
+    fn print_state(&mut self) {
+        println!(
+            "VM State: 
+            x1: 0x{:02X}, x2: 0x{:02X}, x3: 0x{:02X}, x4: 0x{:02X}, 
+            x5: 0x{:02X}, x6: 0x{:02X}, x7: 0x{:02X}, x8: 0x{:02X},
+            xA: 0x{:02X}, xB: 0x{:02X}, xC: 0x{:02X}, BP: 0x{:02X}, 
+            SP: 0x{:02X}, IP: 0x{:02X}{:02X}",
+            self.registers[Register::x1],
+            self.registers[Register::x2],
+            self.registers[Register::x3],
+            self.registers[Register::x4],
+            self.registers[Register::x5],
+            self.registers[Register::x6],
+            self.registers[Register::x7],
+            self.registers[Register::x8],
+            self.registers[Register::xA],
+            self.registers[Register::xB],
+            self.registers[Register::xC],
+            self.registers[Register::BP],
+            self.registers[Register::SP],
+            self.registers[Register::IPhi],
+            self.registers[Register::IPlo],
+        );
     }
 }
 
@@ -237,7 +330,7 @@ impl LinearMemory {
 
 impl Memory for LinearMemory {
     fn read(&self, addr: u32, bytes: usize) -> VMResult<Vec<u8>> {
-        let mut res = Vec::with_capacity(bytes);
+        let mut res = vec![0; bytes];
         for i in 0..bytes {
             let index = addr as usize + i;
             let Some(byte) = self.bytes.get(index) else {
@@ -308,6 +401,38 @@ impl std::ops::Index<Register> for [u16] {
 
 impl std::ops::IndexMut<Register> for [u16] {
     fn index_mut(&mut self, index: Register) -> &mut Self::Output { &mut self[index as usize] }
+}
+
+impl From<u8> for Register {
+    fn from(value: u8) -> Self {
+        let value = value & 0x0F;
+        match value {
+            0x00 => Register::x0,
+            0x01 => Register::x1,
+            0x02 => Register::x2,
+            0x03 => Register::x3,
+            0x04 => Register::x4,
+            0x05 => Register::x5,
+            0x06 => Register::x6,
+            0x07 => Register::x7,
+            0x08 => Register::x8,
+            0x09 => Register::xA,
+            0x0A => Register::xB,
+            0x0B => Register::xC,
+            0x0C => Register::BP,
+            0x0D => Register::SP,
+            0x0E => Register::IPlo,
+            0x0F => Register::IPhi,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Signal {
+    Halt,
+    None,
+    Print,
 }
 
 fn print_instr(vm: &Machine, instr: Instruction) -> String {
