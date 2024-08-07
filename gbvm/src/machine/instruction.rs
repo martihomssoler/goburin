@@ -30,20 +30,18 @@ pub enum Instruction {
     Addf { r: Register, s: Register },
     Sub { r: Register, s: Register },
     Subf { r: Register, s: Register },
-    Muls { r: Register, s: Register },
-    Mulu { r: Register, s: Register },
+    Mul { r: Register, s: Register },
     Mulf { r: Register, s: Register },
     Divs { r: Register, s: Register },
     Divu { r: Register, s: Register },
     Divf { r: Register, s: Register },
-    Addi { r: Register, val: Imm4bit },
-    Subi { r: Register, val: Imm4bit },
+    Addi { r: Register, val: SImm4bit },
     Shl { r: Register, s: Register },
     Shr { r: Register, s: Register },
     Sha { r: Register, s: Register },
-    Shli { r: Register, val: Imm4bit },
-    Shri { r: Register, val: Imm4bit },
-    Shai { r: Register, val: Imm4bit },
+    Shli { r: Register, val: UImm4bit },
+    Shri { r: Register, val: UImm4bit },
+    Shai { r: Register, val: UImm4bit },
     Neg { r: Register, s: Register },
     And { r: Register, s: Register },
     Or { r: Register, s: Register },
@@ -77,4 +75,6 @@ pub enum Instruction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Imm7bit(pub i16);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Imm4bit(pub i16);
+pub struct UImm4bit(pub u16);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SImm4bit(pub i16);
