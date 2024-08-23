@@ -3,8 +3,8 @@
 
 mod macros;
 
-use super::{Instruction::*, Machine, Register::*, SImm4bit, Signal, UImm4bit};
-use crate::{case, nok, run_cases};
+use super::{Instruction::*, Machine, Register::*, SImm4bit, UImm4bit};
+use crate::{case, nok, run_cases, Imm7bit, Instruction, Signal, VMResult};
 
 #[test]
 fn t_arithmetics_integer() {
@@ -121,4 +121,45 @@ fn t_bit_logic() {
         case!([(x1, 0xABCD), (x2, 0x0000)], [(Xor { r: x1, s: x2 }, nok!())], [(xA, 0xABCD)]),
     ];
     run_cases!(cases);
+}
+
+#[test]
+fn fibonacci_10() -> VMResult<()> {
+    let program = [
+        // fibonacci 10
+        // initialization
+        Instruction::Ld8a { value: 0 },
+        Instruction::Cpy { r: x1, s: xA },
+        Instruction::Ld8a { value: 1 },
+        Instruction::Cpy { r: x2, s: xA },
+        Instruction::Ld8a { value: 10 },
+        Instruction::Addi { r: xA, val: SImm4bit(-1) },
+        Instruction::Cpy { r: x3, s: xA },
+        // condition
+        Instruction::Cle { r: x3, s: x0 },
+        Instruction::Jnzr { offset: Imm7bit(13) },
+        // body
+        Instruction::Add { r: x1, s: x2 },
+        Instruction::Signal1,
+        Instruction::Cpy { r: x1, s: x2 },
+        Instruction::Cpy { r: x2, s: xA },
+        Instruction::Addi { r: x3, val: SImm4bit(-1) },
+        Instruction::Cpy { r: x3, s: xA },
+        Instruction::Jmpr { offset: Imm7bit(-17) },
+        // over
+        Instruction::Cpy { r: xA, s: x2 },
+        Instruction::Signal1,
+        Instruction::Signal0,
+    ];
+    let mut vm = Machine::new(&program)?;
+    loop {
+        if let Some(signal) = vm.step()? {
+            if signal == Signal::Halt {
+                break;
+            }
+        }
+    }
+    assert_eq!(vm.get_register_value(xA), 55);
+
+    Ok(())
 }
