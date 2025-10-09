@@ -1,5 +1,0 @@
-main :: Function () -> Void = {
-	temp : Int = 28;
-	print "The temperature is: ", temp, " degrees\n";
-	return 0;	
-}

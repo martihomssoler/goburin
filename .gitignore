@@ -1,6 +1,2 @@
-### Rust ###
-/target
 
-### Obsidian ###
-# config dir
-.obsidian/
+.direnv

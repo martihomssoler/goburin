@@ -1,3 +1,0 @@
-main :: Function () -> Int = {
-	return 2;	
-}
