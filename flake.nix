@@ -11,7 +11,7 @@
        pkgs = (import nixpkgs { inherit system; });
        nativeBuildInputs = with pkgs; [ pkg-config ];
        buildInputs       = with pkgs; [ fasm ];
-       devInputs         = with pkgs; [ tree watchexec hexyl gf ];
+       devInputs         = with pkgs; [ tree watchexec hexyl ];
     in
     {
       devShells.default = pkgs.mkShell {
