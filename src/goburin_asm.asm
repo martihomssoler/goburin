@@ -1,6 +1,4 @@
-format ELF64 executable 3
-
-entry _start
+format ELF64
 
 STDIN  = 0
 STDOUT = 1
@@ -34,21 +32,21 @@ macro syscall3 value, arg1, arg2, arg3
 
 macro exit value
 {
-        syscall1 SYS_EXIT, value   
+        syscall1 SYS_EXIT, value
 }
 
 macro write fd, buf, len
 {
         syscall3 SYS_WRITE, fd, buf, len
-      
-}        
+}
 
 macro open filename, flags, mode
 {
         syscall3 SYS_OPEN, filename, flags, mode
-}        
+}
 
-segment readable executable
+section '.text' executable
+public _start
 _start:
         ; rax <- O_WRONLY | O_CREAT
         mov rbx, O_WRONLY
@@ -80,8 +78,7 @@ _start:
         exit rax
         ret
 
-segment readable writable
-
+section '.rodata' writable
 input_path: file "src/goburin_forth.forth"
 input_path_len = $ - input_path
 
