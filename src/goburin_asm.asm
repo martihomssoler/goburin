@@ -9,10 +9,11 @@ SYS_OPEN  = 2
 SYS_CLOSE = 3
 SYS_EXIT  = 60
 
-O_RDONLY = 00h
-O_WRONLY = 01h
-O_RDWR	 = 02h
-O_CREAT	 = 40h
+O_RDONLY = 000h
+O_WRONLY = 001h
+O_RDWR	 = 002h
+O_CREAT	 = 040h
+O_TRUNC	 = 200h
 
 macro syscall1 value, arg1
 {
@@ -45,21 +46,35 @@ macro open filename, flags, mode
         syscall3 SYS_OPEN, filename, flags, mode
 }
 
+macro open_output
+{
+        ; rax <- O_WRONLY | O_CREAT | O_TRUNC
+        mov rbx, O_WRONLY
+        or rbx, O_CREAT
+        or rbx, O_TRUNC
+        
+        open output, rbx, 777o
+        cmp rax, 0 ; check for error
+        jl .failed_open
+        mov [output_fd], rax
+}
+
+macro write_output msg, msg_len
+{
+        mov [char_to_write], msg
+        write [output_fd], char_to_write, msg_len
+        cmp rax, 0 ; check for error
+        jl .failed_write
+}
+
+; --- Code section
 section '.text' executable
 public _start
 _start:
-        ; rax <- O_WRONLY | O_CREAT
-        mov rbx, O_WRONLY
-        or rbx, O_CREAT
-        
-        open output_path, rbx, 777o
-        cmp rax, 0 ; check for error
-        jl .failed_open
+        open_output
 
-        mov rdx, rax
-        write rdx, input_path, input_path_len
-        cmp rax, 0 ; check for error
-        jl .failed_write
+        write_output 'A', 1
+        write_output " B C", 4
         
         exit 0
         ret
@@ -78,13 +93,17 @@ _start:
         exit rax
         ret
 
+; --- Data section 
 section '.rodata' writable
-input_path: file "src/goburin_forth.forth"
-input_path_len = $ - input_path
+input: file "src/goburin_forth.forth"
+input_len = $ - input
 
-output_path: db "build/goburin_forth", 0
+output: db "build/goburin_forth", 0
+output_fd: dq 0
 
 failed_open_msg: db "Failed to open file", 0
 failed_open_msg_len = $ - failed_open_msg
 failed_write_msg: db "Failed to write file", 0
 failed_write_msg_len = $ - failed_write_msg
+
+char_to_write dq 0

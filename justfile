@@ -21,7 +21,7 @@ wrun:
     watchexec -c -e asm -r -- just run
 
 whex arg:
-    watchexec -c --exts bin -- hexyl {{arg}}
+    watchexec -c -w {{arg}} -- hexyl {{arg}}
 
 # ---------------------------------------------
 
