@@ -64,6 +64,7 @@ public _start
 
 _start:
 ; open output file
+        push qword 4
         mov rbx, O_WRONLY
         or rbx, O_CREAT
         or rbx, O_TRUNC
@@ -74,7 +75,11 @@ _start:
 .loop:
         call read_token
         cmp rax, 1 ; 1 is the return when EOF is read
-        je .exit
+        jne .compile
+        mov rax, [string_idx]
+        test rax, rax
+        jz .exit ; only exit if `string_idx` == 0
+.compile:
         call compile
         jmp .loop
 .exit:
@@ -173,7 +178,13 @@ compile:
 .try_number:
         mov rbx, 0 ; current number
         mov rcx, 1 ; current multiplier
-        ; TODO: check for other bases other than 10 
+; check for an `h` at the right most character
+        mov byte [base], 10
+        movzx rax, byte [rdi + rsi - 1]
+        cmp rax, 'h' ; number is not in hex
+        jne .number_loop
+        mov byte [base], 16
+        dec rsi
 .number_loop:
         movzx rax, byte [rdi + rsi - 1]
 .check_sign:
@@ -212,14 +223,14 @@ compile:
         movzx rcx, byte [base] ; overwrite rax with the base
         mul rcx                ; rax * rcx => multiplier * base
         mov rcx, rax
-        dec edx
+        dec rsi
         jz .number_found      ; end of token
         jmp .number_loop
 .number_found:
 ; generate code in `scratch` buffer
-        mov byte [scratch+0], 68h ; push dword instruction (1)
-        mov [scratch+1], rbx      ; the number (4)
-        tail_codegen 5            ; super important the tail call to return to the parent function
+        mov byte [scratch+0], 68h  ; push dword instruction (1)
+        mov [scratch+1], qword rbx ; the number (4)
+        tail_codegen 5             ; (1 + 4) super important the tail call to return to the parent function
 .number_not_found:
         exit UNKNOWN_WORD
 
@@ -259,11 +270,11 @@ input_idx: dq 0
 output: db "build/goburin_forth", 0
 output_fd: dq 0
 
-string: times 32 db 0
+string: rb 32
 string_len = $ - string
 string_idx: dq 0
 
-scratch: times 128 db 0
+scratch: rb 128 
 
 ; string `constants`
 newline: db 10
