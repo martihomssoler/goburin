@@ -1,1 +1,4 @@
-: main prologue compile-all epilogue ;
+34  
+35
+  +
+

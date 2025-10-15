@@ -7,7 +7,7 @@ in_extension := "asm"
 @build: setup
     fasm $src_dir_name"/goburin_"$in_extension"."$in_extension $build_dir_name"/goburin_"$in_extension".o"
     ld -o $build_dir_name"/goburin_"$in_extension $build_dir_name"/goburin_"$in_extension".o"
-    rm $build_dir_name"/goburin_"$in_extension".o"
+    rm -f -- $build_dir_name"/goburin_"$in_extension".o"
 
 @run: build
     "./"$build_dir_name"/goburin_"$in_extension
