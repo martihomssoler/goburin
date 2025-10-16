@@ -12,6 +12,7 @@ format ELF64
         SYS_OPEN  equ 2
         SYS_CLOSE equ 3
         SYS_LSEEK equ 8
+        SYS_MMAP  equ 9
         SYS_EXIT  equ 60
 
         ;;; FILE PERMISIONS
@@ -32,21 +33,21 @@ format ELF64
         NOMAIN_ERROR       equ 7
 
         ;;; OTHERS
-        ENTRY_ADDR  equ 0x08048000
-        VADDR_START equ 0x08048000
+        ENTRY_ADDR  equ 0x00_00_40_00_00
+        DATA_ADDR   equ 0x00_00_60_00_00
 ;;; macros
 
 macro syscall1 value, arg1 {
-        mov rax, value
         mov rdi, arg1
+        mov rax, value
         syscall        
 }
 
 macro syscall3 value, arg1, arg2, arg3 {
-        mov rax, value
-        mov rdi, arg1
-        mov rsi, arg2 
         mov rdx, arg3 
+        mov rsi, arg2 
+        mov rdi, arg1
+        mov rax, value
         syscall  
 }
 
@@ -63,6 +64,24 @@ macro codegen size {
 macro tail_codegen size {
         mov rbx, size
         jmp output_scratch
+}
+
+macro debug_token token, token_len {
+if 1
+        push rdi
+        push rsi
+        push rbx
+        push rcx
+        mov rbx, token
+        mov rcx, token_len
+        write STDOUT, rbx, rcx
+        write STDOUT, newline, 1
+        pop rcx
+        pop rbx
+        pop rsi
+        pop rdi
+else 
+end if
 }
 
 ;;; CODE SECTION
@@ -82,13 +101,13 @@ _start:
         mov [output_fd], rax
 
 ; write elf header
-        write [output_fd], elf_header, elf_header_len + program_header_len
+; we need to add padding because we hardcoded that our `starting address` is in C0h
+; we should be now at B0h, so we just need to add 16 bytes
+        write [output_fd], elf_header, elf_header_len + program_header_len + data_header_len + 16
         test rax, rax
         jz .failed_write
-
-; main compilation loop
-        mov rax, [scratch_idx]
-        mov [entry_point], rax
+; TODO: entry_point patching
+; compilation loop
 .loop:
         call read_token
         cmp rax, 1 ; 1 is the return when EOF is read
@@ -100,20 +119,7 @@ _start:
         call compile
         jmp .loop
 ; end loop
-
 .epilogue:
-        mov rcx, 4
-        ; TODO: search "main" in the word dictionary
-        mov rdi, [entry_point]
-        cmp rdi, -1
-        jne .main_found
-        jmp .failed_finding_main
-.main_found:
-        sub rdi, [scratch_idx]
-        sub rdi, 5                  ; sub 5 to the start of the jump instruction
-        mov byte [scratch+0], 0xe9  ; jmp ...
-        mov [scratch+1], rdi        ; <relative address of main>
-        codegen 5
 
 .patch_header:
 
@@ -124,12 +130,13 @@ _start:
         jz .failed_lseek
 
 ; patch `filesz`
-        mov rax, [scratch_idx]
-        mov qword [scratch], rax
-        codegen 4                  ; write to `filesz` field
-        codegen 4                  ; write the same value to `memsz` field since the fd head moved
-        sub qword [scratch_idx], 8 ; the two "codegen 4" calls have increased `scratch_idx`
-                                   ; by 8 but did not generate any code
+        mov rax, [current_offset]
+        add rax, elf_header_len + program_header_len + data_header_len + 16 - 1
+        mov [scratch], qword rax
+        codegen 8                     ; write to `filesz` field
+        codegen 8                     ; write the same value to `memsz` field since the fd head moved
+        sub qword [current_offset], 8 ; the two "codegen 4" calls have increased `current_offset`
+                                      ; by 8 but did not generate any code
 
 ; seek 'entry' in `output`
         mov rbx, offset_entry 
@@ -138,12 +145,9 @@ _start:
         jz .failed_lseek
 
 ; patch `entry`
-        mov rax, 84
-        add rax, ENTRY_ADDR
-        add rax, [scratch_idx]
-        sub rax, 5  ; we're at the end of the final jmp, go back to its beginning
-        mov qword [scratch], rax
-        codegen 4
+        mov rax, 0x4000C0
+        mov qword [scratch], 0x4000C0
+        codegen 8
 
         exit SUCCESS
 .failed_open:
@@ -239,8 +243,59 @@ read_token:
 ; ### post
 ; destroys:
 ;   - rax, rbx, rcx, rdi, rsi
+public compile
 compile:
-; arithmetic
+        debug_token string, [string_idx]
+
+.try_ret:
+; ret
+        cmp rsi, 3 ; word with 3 characters?
+        jne .try_exit
+        movzx rax, byte [rdi + 0]
+        cmp rax, "r"
+        jne .try_exit
+        movzx rax, byte [rdi + 1]
+        cmp rax, "e"
+        jne .try_exit
+        movzx rax, byte [rdi + 2]
+        cmp rax, "t"
+        jne .try_exit
+        mov byte [scratch+0], 0xC3   ; ret
+        tail_codegen 1
+
+.try_exit:
+; exit
+        cmp rsi, 4 ; word with 4 characters?
+        jne .try_arithmetic
+        movzx rax, byte [rdi + 0]
+        cmp rax, "e"
+        jne .try_arithmetic
+        movzx rax, byte [rdi + 1]
+        cmp rax, "x"
+        jne .try_arithmetic
+        movzx rax, byte [rdi + 2]
+        cmp rax, "i"
+        jne .try_arithmetic
+        movzx rax, byte [rdi + 3]
+        cmp rax, "t"
+        jne .try_arithmetic
+        ; 58 48 89 c7 48 c7 c0 3c 00 00 00 0f 05 c3
+        mov byte [scratch+0],  0x58           ; pop rax
+        mov word [scratch+1],  0x8948         ; ... ??
+        mov word [scratch+3],  0x48C7         ; mov rdi, rax
+        mov dword [scratch+5], 0x003cC0C7     ; mov rax, SYS_EXIT
+        mov word [scratch+9],  0x0000         ; ... padding
+        mov word [scratch+11], 0x050F         ; syscall        
+        mov byte [scratch+13], 0xC3           ; ret
+        tail_codegen 14
+
+.try_arithmetic:
+; addition
+        cmp rsi, 1 ; word with 1 character?
+        jne .try_number
+        movzx rax, byte [rdi + rsi - 1]
+        cmp rax, "+"
+        je compile_addition
 
 ; number
 ; we parse the number from right to left
@@ -321,21 +376,24 @@ output_scratch:
         jge .success
 ; write error message
         write STDERR, failed_write_scratch_msg, failed_write_scratch_msg_len
-        write STDERR, grave_accent, 1
+        write STDERR, quote, 1
         write STDERR, scratch, rbx
-        write STDERR, grave_accent, 1
+        write STDERR, quote, 1
         write STDERR, newline, 1
 .success:
-        add qword [scratch_idx], rbx
+        add qword [current_offset], rbx
         ret
 
 ;;; COMPILE BUILTINS
+
+;;;
 compile_addition:
         mov byte [scratch+0], 0x5b   ; pop rbx
         mov byte [scratch+1], 0x58   ; pop rax
-        mov word [scratch+2], 0x4801 ; add rax, rbx
-        mov byte [scratch+4], 0x50   ; push rax
-        tail_codegen 5
+        mov byte [scratch+2], 0x48   ; add ...
+        mov word [scratch+3], 0xd801 ; ... rax, rbx
+        mov byte [scratch+5], 0x50   ; push rax 48 01 d8
+        tail_codegen 6
 
 ;;; DATA SECTION
 ;;; -- WRITABLE
@@ -349,10 +407,9 @@ string_len = $ - string
 string_idx: dq 0
 
 scratch: rb 128 
-scratch_idx: dq 0
+current_offset: dq 0
 base: db 16
 
-entry_point: dq -1
 ;;; -- READ ONLY
 section '.rodata'
 
@@ -363,7 +420,7 @@ output: db "build/goburin_forth", 0
 
 ; string `constants`
 newline: db 10
-grave_accent: db 96
+quote: db 39
 
 ;;; -- BUILTINS
 builtins:
@@ -395,7 +452,7 @@ failed_finding_main_msg_len = $ - failed_finding_main_msg
 ;;; ELF64 Header
 elf_header:
         db 7fh, 45h, 4ch, 46h, 02h, 01h, 01h, 00h ; e_ident     => Magic number and other info
-        times 8 db 00h
+        db 00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
         dw 02h                                    ; (w) e_type      => Object file type 
         dw 3eh                                    ; (w) e_machine   => Architecture 
         dd 01h                                    ; (d) e_version   => Object file version 
@@ -406,25 +463,42 @@ elf_header:
         dd 00h                                    ; (d) e_flags     => Processor-specific flags 
         dw elf_header_len                         ; (w) e_ehsize    => ELF header size in bytes 
         dw program_header_len                     ; (w) e_phentsize => Program header table entry size 
-        dw 01h                                    ; (w) e_phnum     => Program header table entry count 
+        dw 02h                                    ; (w) e_phnum     => Program header table entry count (2 entries) 
         dw 00h                                    ; (w) e_shentsize => Section header table entry size 
         dw 00h                                    ; (w) e_shnum     => Section header table entry count 
         dw 00h                                    ; (w) e_shstrndx  => Section header string table index 
 elf_header_len = $ - elf_header
 
 program_header:
-        dd 01h                                    ; (d) p_type      => Segment type
-        dd 05h                                    ; (d) p_flags     => Segment flags
+        dd 01h                                    ; (d) p_type      => Segment type (PT_LOAD)
+        dd 05h                                    ; (d) p_flags     => Segment flags (READ + EXEC)
         dq 00h                                    ; (q) p_offset    => Segment file offset
-        dq VADDR_START                            ; (q) p_vaddr     => Segment virtual address
-        dq VADDR_START                            ; (q) p_paddr     => Segment physical address
+        dq ENTRY_ADDR                             ; (q) p_vaddr     => Segment virtual address
+        dq 00h                                    ; (q) p_paddr     => Segment physical address
         dq 00h                                    ; (q) p_filesz    => Segment size in file              -- TO BE PATCHED
-        ;  ^-- (20 bytes offset)
+        ;  ^-- (32 bytes offset)
         dq 00h                                    ; (q) p_memsz     => Segment size in memory            -- TO BE PATCHED
-        ;  ^-- (24 bytes offset)
+        ;  ^-- (40 bytes offset)
         dq 0x1000                                 ; (q) p_align     => Segment alignment
 program_header_len = $ - program_header
 
+data_header:
+        dd 01h                                    ; (d) p_type      => Segment type (PT_LOAD)
+        dd 04h                                    ; (d) p_flags     => Segment flags (READ)
+        dq 00h                                    ; (q) p_offset    => Segment file offset
+        dq DATA_ADDR                              ; (q) p_vaddr     => Segment virtual address
+        dq 00h                                    ; (q) p_paddr     => Segment physical address
+        dq 0100h                                  ; (q) p_filesz    => Segment size in file              -- TO BE PATCHED
+        ;  ^-- (32 bytes offset)
+        dq 0100h                                  ; (q) p_memsz     => Segment size in memory            -- TO BE PATCHED
+        ;  ^-- (40 bytes offset)
+        dq 0x1000                                 ; (q) p_align     => Segment alignment
+data_header_len = $ - data_header
+
+; we need to padd by 16 bytes because we hardcoded that our `starting address`
+padding:
+        db 00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
+        db 00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
+
 offset_entry  = 24
-offset_filesz = 20 + elf_header_len
-offset_memsz  = 24 + elf_header_len
+offset_filesz = 32 + elf_header_len

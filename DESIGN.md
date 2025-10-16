@@ -17,7 +17,10 @@ All cells, aka variables, are 64-bit wide, aka quad-word.
 - [Linux Syscalls 1](https://chromium.googlesource.com/chromiumos/docs/+/master/constants/syscalls.md)
 - [Linux Syscalls 2](https://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/)
 - [ELF Format Cheat Sheet](https://gist.github.com/x0nu11byt3/bcb35c3de461e5fb66173071a2379779)
-- [ELF64 Object File Specification](https://irix7.com/techpubs/007-4658-001.pdf) ...
+- [ELF64 Object File Specification](https://irix7.com/techpubs/007-4658-001.pdf)
+- [Writing a Linux ELF Binary by Hand](https://www.youtube.com/watch?v=JM9jX2aqkog)
+- [Crafting executables from raw bytes - Kay Lack](https://www.youtube.com/watch?v=cX5tQJhuNeY) <- life saver!
+- ...
 
 # Useful Tools
 

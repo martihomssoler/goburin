@@ -24,9 +24,6 @@ wbuild:
 wrun:
     watchexec -c -e asm -r -- just run
 
-wverify:
-    watchexec -c -e asm -r -- just verify
-
 whex arg:
     watchexec -c -w {{arg}} -- hexyl {{arg}}
 
