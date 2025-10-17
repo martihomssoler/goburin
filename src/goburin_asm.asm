@@ -111,11 +111,11 @@ _start:
 .loop:
         call read_token
         cmp rax, 1 ; 1 is the return when EOF is read
-        jne .compile
+        jne .compile_token
         mov rax, [string_idx]
         test rax, rax
         jz .epilogue; only exit if `string_idx` == 0
-.compile:
+.compile_token:
         call compile
         jmp .loop
 ; end loop
@@ -247,55 +247,36 @@ public compile
 compile:
         debug_token string, [string_idx]
 
-.try_ret:
-; ret
-        cmp rsi, 3 ; word with 3 characters?
-        jne .try_exit
-        movzx rax, byte [rdi + 0]
-        cmp rax, "r"
-        jne .try_exit
-        movzx rax, byte [rdi + 1]
-        cmp rax, "e"
-        jne .try_exit
-        movzx rax, byte [rdi + 2]
-        cmp rax, "t"
-        jne .try_exit
-        mov byte [scratch+0], 0xC3   ; ret
-        tail_codegen 1
+.try_builtins:
+; rbx <- current builtin index
+        mov rbx, 0
+.builtins_loop:
+        mov al, byte [builtins + rbx]         ; builtins[curr_word] == ...
+        cmp al, 0                             ; end of builtins?
+        je .try_number
+; rcx <- current index for word comparison
+        mov rcx, 0
+.builtins_token_loop:
+; al <- current byte to be compared with read token
+        mov al, byte [builtins + rbx + rcx] ; builtins[curr_word][char] == ...
+        cmp al, byte [rdi + rcx]              ; ... token[char]
+        jne .builtins_not_found
+; the first char matches the builtin word
+        inc rcx
+; check if char index is equal to token index (rsi)
+        cmp rcx, rsi
+        je .builtins_found
+; this means the token is exactly the builtin word we want
+; NOTE: builtin words cannot have substrings, so they need to be unique!
+        jmp .builtins_token_loop
+        
+.builtins_not_found:
+        add rbx, 16                     ; 8 bytes for the word + 8 bytes for the address
+        jmp .builtins_loop
 
-.try_exit:
-; exit
-        cmp rsi, 4 ; word with 4 characters?
-        jne .try_arithmetic
-        movzx rax, byte [rdi + 0]
-        cmp rax, "e"
-        jne .try_arithmetic
-        movzx rax, byte [rdi + 1]
-        cmp rax, "x"
-        jne .try_arithmetic
-        movzx rax, byte [rdi + 2]
-        cmp rax, "i"
-        jne .try_arithmetic
-        movzx rax, byte [rdi + 3]
-        cmp rax, "t"
-        jne .try_arithmetic
-        ; 58 48 89 c7 48 c7 c0 3c 00 00 00 0f 05 c3
-        mov byte [scratch+0],  0x58           ; pop rax
-        mov word [scratch+1],  0x8948         ; ... ??
-        mov word [scratch+3],  0x48C7         ; mov rdi, rax
-        mov dword [scratch+5], 0x003cC0C7     ; mov rax, SYS_EXIT
-        mov word [scratch+9],  0x0000         ; ... padding
-        mov word [scratch+11], 0x050F         ; syscall        
-        mov byte [scratch+13], 0xC3           ; ret
-        tail_codegen 14
-
-.try_arithmetic:
-; addition
-        cmp rsi, 1 ; word with 1 character?
-        jne .try_number
-        movzx rax, byte [rdi + rsi - 1]
-        cmp rax, "+"
-        je compile_addition
+.builtins_found:
+        mov rax, [builtins + rbx + 8]   ; we want to get the address of the builtin word
+        jmp qword rax
 
 ; number
 ; we parse the number from right to left
@@ -355,12 +336,9 @@ compile:
         mov byte [scratch+0], 68h  ; push dword instruction (1)
         mov [scratch+1], qword rbx ; the number (4)
         tail_codegen 5             ; (1 + 4) super important the tail call to return to the parent function
+
 .number_not_found:
         exit UNKNOWN_WORD_ERROR
-
-        write [output_fd], string, [string_idx]
-        write [output_fd], newline, 1
-        ret
 
 ;; output the contents of `scratch`
 ; ### pre
@@ -387,13 +365,54 @@ output_scratch:
 ;;; COMPILE BUILTINS
 
 ;;;
-compile_addition:
+compile_plus:
         mov byte [scratch+0], 0x5b   ; pop rbx
         mov byte [scratch+1], 0x58   ; pop rax
         mov byte [scratch+2], 0x48   ; add ...
         mov word [scratch+3], 0xd801 ; ... rax, rbx
-        mov byte [scratch+5], 0x50   ; push rax 48 01 d8
+        mov byte [scratch+5], 0x50   ; push rax
         tail_codegen 6
+
+compile_minus:
+        mov byte [scratch+0], 0x5b   ; pop rbx
+        mov byte [scratch+1], 0x58   ; pop rax
+        mov byte [scratch+2], 0x48   ; sub ...
+        mov word [scratch+3], 0xd829 ; ... rax, rbx
+        mov byte [scratch+5], 0x50   ; push rax
+        tail_codegen 6
+
+compile_multiply:
+        mov byte [scratch+0], 0x58   ; pop rax
+        mov byte [scratch+1], 0x5a   ; pop rdx
+        mov byte [scratch+2], 0x48   ; mul ...
+        mov word [scratch+3], 0xe2f7 ; ... rdx (into rax)
+        mov byte [scratch+5], 0x50   ; push rax
+        tail_codegen 6
+
+compile_divide:
+        mov byte [scratch+0], 0x48   ; xor ...
+        mov word [scratch+1], 0xd231 ; ... rdx,rdx
+        mov byte [scratch+3], 0x5b   ; pop    rbx
+        mov byte [scratch+4], 0x58   ; pop    rax
+        mov byte [scratch+5], 0x48   ; div ...
+        mov word [scratch+6], 0xf3f7 ; ... rbx
+        mov byte [scratch+8], 0x50   ; push   rax
+        tail_codegen 9
+
+compile_ret:
+        mov byte [scratch+0], 0xC3   ; ret
+        tail_codegen 1
+
+compile_exit:
+        ; 58 48 89 c7 48 c7 c0 3c 00 00 00 0f 05 c3
+        mov byte [scratch+0],  0x58           ; pop rax
+        mov word [scratch+1],  0x8948         ; ... ??
+        mov word [scratch+3],  0x48C7         ; mov rdi, rax
+        mov dword [scratch+5], 0x003cC0C7     ; mov rax, SYS_EXIT
+        mov word [scratch+9],  0x0000         ; ... padding
+        mov word [scratch+11], 0x050F         ; syscall        
+        mov byte [scratch+13], 0xC3           ; ret
+        tail_codegen 14
 
 ;;; DATA SECTION
 ;;; -- WRITABLE
@@ -421,11 +440,6 @@ output: db "build/goburin_forth", 0
 ; string `constants`
 newline: db 10
 quote: db 39
-
-;;; -- BUILTINS
-builtins:
-        db 1, "+" 
-        dd compile_addition
 
 ;;; -- FAIL MESSAGES
 failed_open_msg: db "Failed to open file", 10, 0
@@ -502,3 +516,31 @@ padding:
 
 offset_entry  = 24
 offset_filesz = 32 + elf_header_len
+
+;;; -- BUILTINS
+; every builtin consists of:
+; - 64 bits for the "keyword"
+; - 64 bits to the routine that compiles it
+; 
+; NOTE: builtin words cannot have substrings, so they need to be unique!
+; Cannot have two words, one being a substring of another like "str" and "string"!
+builtins:
+; size 1
+        dq "+"
+        dq compile_plus
+        dq "-"
+        dq compile_minus
+        dq "*"
+        dq compile_multiply
+        dq "/"
+        dq compile_divide
+; size 3
+        dq "ret" 
+        dq compile_ret
+; size 4
+        dq "exit" 
+        dq compile_exit
+
+; end of built-ins
+        db 0
+

@@ -13,7 +13,7 @@ out_extension := "forth"
 @run: build
     "./"$build_dir_name"/goburin_"$in_extension
 
-@verify:
+@verify: run
     "./"$build_dir_name"/goburin_"$out_extension
 
 # ---------------------------------------------
@@ -23,6 +23,9 @@ wbuild:
 
 wrun:
     watchexec -c -e asm -r -- just run
+
+wverify:
+    watchexec -c -e asm -r -- just verify
 
 whex arg:
     watchexec -c -w {{arg}} -- hexyl {{arg}}
