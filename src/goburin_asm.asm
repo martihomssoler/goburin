@@ -209,7 +209,9 @@ read_token:
 ; check for `whitespaces`
         cmp rbx, " "; is char an ASCII 'control' char + space, aka less than space=32
         jle .whitespace
-        ; TODO: skip comments
+; check for '\' comment
+        cmp rbx, "\"
+        je .comment
 ; char is valid
 ; write char to `string`
         mov rdi, string
@@ -227,6 +229,20 @@ read_token:
         je .read_char
         mov rax, 0
         jmp .return
+.comment:
+; keep advancing the index until we get EOF or a newline
+        inc rsi
+        mov [input_idx], rsi
+; check if EOF
+        cmp [input_idx], dword input_len
+        jge .eof
+        movzx rbx, byte [rdi + rsi]
+        cmp rbx, 10 ; newline value is 10
+        je .newline
+        jmp .comment
+.newline:
+; we jump back to the beginning of this function, resetting the string but not the input
+        jmp read_token
 .eof:
         mov rax, 1
 .return: 
