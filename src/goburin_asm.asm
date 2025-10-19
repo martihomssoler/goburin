@@ -37,6 +37,9 @@ format ELF64
         ;;; OTHERS
         ENTRY_ADDR  equ 0x00_00_40_00_00
         DATA_ADDR   equ 0x00_00_60_00_00
+
+        MAX_DICT_ENTRIES equ 255
+        MAX_TOKEN_SIZE   equ 32
 ;;; macros
 
 macro syscall1 value, arg1 {
@@ -70,7 +73,7 @@ macro tail_codegen size {
 }
 
 macro debug_token token, token_len {
-if 0
+if 1
         push rdi
         push rsi
         push rbx
@@ -94,6 +97,7 @@ public _start
 public compile
 public read_token
 public read_stdin
+public add_dict
 
 _start:
 
@@ -358,7 +362,44 @@ compile:
 .number_not_found:
         exit UNKNOWN_WORD_ERROR
 
-;; output the contents of `scratch`
+; add an entry to the dictionary
+;
+; ### pre
+; expects:
+;   - rdx = address of the token in memory
+;   - rdi = pointer to the token name
+;   - rsi = length of the token
+;  
+; ### post
+; destroys:
+;   - rax, rcx, rdx, rdi, rsi
+add_dict:
+        push rsi
+        push rdi
+; change some registers so we can use `rep movsb` and others later on
+        mov rcx, rsi             ; rci should contain token length
+        mov rsi, rdi             ; rsi should contain token ptr
+; 
+        lea rdi, [dict]          ; rdi should contain the dict addr
+        mov rax, [dict_len]
+        mov rdx, dict_entry_len
+        mul rdx                  ; rax = offset of new token multiple of `dict_entry_len`
+        add rdi, rax             ; rdi = points to an empty entry, to be filled with the `token` info
+; write token name_len 
+        mov [rdi + 0], rcx
+; write token name
+        push rcx
+        rep movsb                ; Copy token name, using RSI (ptr) + RCX (len)  for source
+        pop rcx
+; write code_ptr
+        mov [rdi + MAX_TOKEN_SIZE + 8], rdx
+; increment the number of dict entries
+        inc qword [dict_len]
+        pop rdi
+        pop rsi
+        ret
+
+; output the contents of `scratch`
 ; ### pre
 ; expects: 
 ;   - rbx = size of `scratch` to write
@@ -382,7 +423,40 @@ output_scratch:
 
 ;;; COMPILE BUILTINS
 
-;;;
+compile_colon:
+        call read_token
+        debug_token string, [string_idx]
+        mov rdx, [current_offset]
+        call add_dict
+; check if token has length 4 and is "main"
+        mov rbx, rsi
+        cmp rbx, 4
+        jne .not_main
+        mov bl, byte [rdi + 0]
+        cmp bl, "m"
+        jne .not_main
+        mov bl, byte [rdi + 1]
+        cmp bl, "a"
+        jne .not_main
+        mov bl, byte [rdi + 2]
+        cmp bl, "i"
+        jne .not_main
+        mov bl, byte [rdi + 3]
+        cmp bl, "n"
+        jne .not_main
+        jmp .is_main
+.not_main:
+        mov byte [scratch+0], 0x48   ; xchg ...
+        mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
+        tail_codegen 3
+.is_main:
+        ret
+        
+compile_semicolon:
+        mov byte [scratch+0], 0x48   ; xchg ...
+        mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
+        tail_codegen 3
+ 
 compile_plus:
         mov byte [scratch+0], 0x5b   ; pop rbx
         mov byte [scratch+1], 0x58   ; pop rax
@@ -439,13 +513,24 @@ section '.data' writable
 input_buf: rb 1
 output_fd: dq 0
 
-string: rb 32
+string: rb MAX_TOKEN_SIZE
 string_len = $ - string
 string_idx: dq 0
 
 scratch: rb 128 
 current_offset: dq 0
 base: db 16
+
+dict: rb dict_entry_len * MAX_DICT_ENTRIES
+dict_len: rq 1
+
+; only used to calculate the len
+; left for documentation purposes
+dict_entry:
+        name_len rq 1
+        name rb MAX_TOKEN_SIZE
+        code_ptr rq 1
+dict_entry_len = $ - dict_entry
 
 ;;; -- READ ONLY
 section '.rodata'
@@ -544,6 +629,10 @@ offset_filesz = 32 + elf_header_len
 ; Cannot have two words, one being a substring of another like "str" and "string"!
 builtins:
 ; size 1
+        dq ":"
+        dq compile_colon
+        dq ";"
+        dq compile_semicolon
         dq "+"
         dq compile_plus
         dq "-"
