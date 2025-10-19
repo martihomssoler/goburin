@@ -8,6 +8,7 @@ format ELF64
         STDERR    equ 2
 
         ;;; SYSCALLS NUMBERS
+        SYS_READ  equ 0
         SYS_WRITE equ 1
         SYS_OPEN  equ 2
         SYS_CLOSE equ 3
@@ -25,12 +26,13 @@ format ELF64
         ;;; EXIT CODES
         SUCCESS            equ 0
         CREAT_ERROR        equ 1
-        WRITE_ERROR        equ 2
-        SEEK_ERROR         equ 3
-        LSEEK_ERROR        equ 4
-        STRLEN_ERROR       equ 5
-        UNKNOWN_WORD_ERROR equ 6
-        NOMAIN_ERROR       equ 7
+        READ_ERROR         equ 2
+        WRITE_ERROR        equ 3
+        SEEK_ERROR         equ 4
+        LSEEK_ERROR        equ 5
+        STRLEN_ERROR       equ 6
+        UNKNOWN_WORD_ERROR equ 7
+        NOMAIN_ERROR       equ 8
 
         ;;; OTHERS
         ENTRY_ADDR  equ 0x00_00_40_00_00
@@ -51,6 +53,7 @@ macro syscall3 value, arg1, arg2, arg3 {
         syscall  
 }
 
+macro read fd, buf, count { syscall3 SYS_READ, fd, buf, count }
 macro write fd, buf, len { syscall3 SYS_WRITE, fd, buf, len }
 macro open fd, flags, mode { syscall3 SYS_OPEN, fd, flags, mode }
 macro lseek fd, offset, whence { syscall3 SYS_LSEEK, fd, offset, whence }
@@ -67,7 +70,7 @@ macro tail_codegen size {
 }
 
 macro debug_token token, token_len {
-if 1
+if 0
         push rdi
         push rsi
         push rbx
@@ -88,6 +91,9 @@ end if
 
 section '.text' executable
 public _start
+public compile
+public read_token
+public read_stdin
 
 _start:
 
@@ -153,6 +159,9 @@ _start:
 .failed_open:
         write STDERR, failed_open_msg, failed_open_msg_len
         exit CREAT_ERROR
+.failed_read:
+        write STDERR, failed_read_msg, failed_read_msg_len
+        exit READ_ERROR
 .failed_write: 
         write STDERR, failed_write_msg, failed_write_msg_len
         exit WRITE_ERROR
@@ -167,45 +176,24 @@ _start:
         exit NOMAIN_ERROR
         
 
-; Advance the `input_idx` until a `white_space` character is encountered
+; Advance the `string_idx` until a `white_space` character is encountered
 ; writting any non-`whitespace` char in `string`
-;
-; ### pre
-; destroys:
-;   - rax, rbx, rdi, rsi
 ;
 ; ### post
 ;   - rdi = pointer to the string
 ;   - rsi = length of the token found
 ; destroys:
 ;   - rax, rbx, rcx, rdi, rsi
-; 
-; ### pseudo-code ###
-; loop
-;   skip_whitespaces()
-;   char = input[input_idx]
-;   input_idx += 1
-;   if char is [null, new_line, space, ...] return
 ;
-;   string[string_idx] = char
-;   string_idx += 1
-; end_loop
-; ###
 read_token:
 ; reset `string_idx`
         mov [string_idx], dword 0
         mov rsi, 0
 .read_char:
-; read char from `input`
-        mov rdi, input
-        mov rsi, [input_idx]
-        movzx rbx, byte [rdi + rsi]
+        call read_stdin       ; rbx contains the byte
+        jz .eof               ; equal 0, means EOF
 ; advance index
         inc rsi
-        mov [input_idx], rsi
-; check if EOF
-        cmp [input_idx], dword input_len
-        jge .eof
 ; check for `whitespaces`
         cmp rbx, " "; is char an ASCII 'control' char + space, aka less than space=32
         jle .whitespace
@@ -231,17 +219,14 @@ read_token:
         jmp .return
 .comment:
 ; keep advancing the index until we get EOF or a newline
-        inc rsi
-        mov [input_idx], rsi
-; check if EOF
-        cmp [input_idx], dword input_len
-        jge .eof
-        movzx rbx, byte [rdi + rsi]
+        call read_stdin
+        jz .eof
+; check if newline
         cmp rbx, 10 ; newline value is 10
         je .newline
         jmp .comment
 .newline:
-; we jump back to the beginning of this function, resetting the string but not the input
+; we jump back to the beginning of this function, resetting the string
         jmp read_token
 .eof:
         mov rax, 1
@@ -250,7 +235,25 @@ read_token:
         mov rsi, [string_idx]
         ret
 
+; get a character from stdin.
+; returns ascii code in rbx. sets carry on eof.
 ;
+; ### post
+; destroys:
+;   - rax, rbx, rdi, rsi
+read_stdin:
+; read char from STDIN
+        read STDIN, input_buf, 1
+        test rax, rax
+        jb _start.failed_read  ; below 0, means error
+        jnz .get_byte          ; 0 means eof
+        stc                    ; set carry flag
+        ret
+.get_byte:
+        movzx rbx, byte [input_buf]
+        clc                    ; clear carry flag
+        ret
+
 ; ### pre
 ; expects: 
 ;   - rdi = pointer to the string
@@ -259,7 +262,6 @@ read_token:
 ; ### post
 ; destroys:
 ;   - rax, rbx, rcx, rdi, rsi
-public compile
 compile:
         debug_token string, [string_idx]
 
@@ -434,7 +436,7 @@ compile_exit:
 ;;; -- WRITABLE
 section '.data' writable
 
-input_idx: dq 0
+input_buf: rb 1
 output_fd: dq 0
 
 string: rb 32
@@ -448,9 +450,6 @@ base: db 16
 ;;; -- READ ONLY
 section '.rodata'
 
-input: file "src/goburin_forth.forth"
-input_len = $ - input
-
 output: db "build/goburin_forth", 0
 
 ; string `constants`
@@ -460,6 +459,9 @@ quote: db 39
 ;;; -- FAIL MESSAGES
 failed_open_msg: db "Failed to open file", 10, 0
 failed_open_msg_len = $ - failed_open_msg
+
+failed_read_msg: db "Failed to read file", 10, 0
+failed_read_msg_len = $ - failed_read_msg
 
 failed_write_msg: db "Failed to write file", 10, 0
 failed_write_msg_len = $ - failed_write_msg
