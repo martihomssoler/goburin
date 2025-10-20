@@ -40,6 +40,7 @@ format ELF64
 
         MAX_DICT_ENTRIES equ 255
         MAX_TOKEN_SIZE   equ 32
+        DATA_STACK_LEN   equ 2048
 ;;; macros
 
 macro syscall1 value, arg1 {
@@ -73,7 +74,7 @@ macro tail_codegen size {
 }
 
 macro debug_token token, token_len {
-if 1
+if 0
         push rdi
         push rsi
         push rbx
@@ -94,10 +95,11 @@ end if
 
 section '.text' executable
 public _start
-public compile
+public compile_token
 public read_token
 public read_stdin
 public add_dict
+public find_dict
 
 _start:
 
@@ -120,17 +122,30 @@ _start:
 ; compilation loop
 .loop:
         call read_token
-        cmp rax, 1 ; 1 is the return when EOF is read
-        jne .compile_token
+        cmp rax, 1 ; 1 is returned when we read EOF 
+        jne .compile
         mov rax, [string_idx]
         test rax, rax
         jz .epilogue; only exit if `string_idx` == 0
-.compile_token:
-        call compile
+.compile:
+        call compile_token
         jmp .loop
 ; end loop
 .epilogue:
-
+; we try to find the main function and back-patch it
+        mov rdi, main_name
+        mov rsi, main_name_len
+        call find_dict
+        cmp rdx, -1
+        jne .main_found
+        jmp .failed_finding_main
+.main_found:
+        sub rdx, [current_offset]
+        sub rdx, 9                          ; ??? TODO: i need to understand this
+        push rdx
+        mov byte [scratch + 0], 0xe9
+        mov qword [scratch + 1], rdx        ; addresses are 8 bytes 
+        codegen 9
 .patch_header:
 
 ; seek 'filesz' in `output`
@@ -141,12 +156,12 @@ _start:
 
 ; patch `filesz`
         mov rax, [current_offset]
-        add rax, elf_header_len + program_header_len + data_header_len + 16 - 1
+        add rax, elf_header_len + program_header_len + data_header_len + 16
         mov [scratch], qword rax
-        codegen 8                     ; write to `filesz` field
-        codegen 8                     ; write the same value to `memsz` field since the fd head moved
-        sub qword [current_offset], 8 ; the two "codegen 4" calls have increased `current_offset`
-                                      ; by 8 but did not generate any code
+        codegen 8                      ; write to `filesz` field
+        codegen 8                      ; write the same value to `memsz` field since the fd head moved
+        sub byte [current_offset], 16  ; the two "codegen 8" calls have increased `current_offset`
+                                       ; by 16 but did not generate any code
 
 ; seek 'entry' in `output`
         mov rbx, offset_entry 
@@ -155,8 +170,12 @@ _start:
         jz .failed_lseek
 
 ; patch `entry`
-        mov rax, 0x4000C0
-        mov qword [scratch], 0x4000C0
+        pop rdx
+        mov rax, 0x400000
+        add rax, elf_header_len + program_header_len + data_header_len + 16
+        add rax, [current_offset]
+        add rax, rdx
+        mov qword [scratch], rax
         codegen 8
 
         exit SUCCESS
@@ -266,9 +285,24 @@ read_stdin:
 ; ### post
 ; destroys:
 ;   - rax, rbx, rcx, rdi, rsi
-compile:
+compile_token:
         debug_token string, [string_idx]
-
+.try_dict:
+        call find_dict                        ; rdx = should have address
+        cmp rdx, -1                           ; word not found in dictionary
+        je .try_builtins
+; add prelude for function calling
+        mov byte [scratch+0], 0x48            ; xchg ...
+        mov word [scratch+1], 0xe587          ; ... rbp, rsp
+        mov byte [scratch+3], 0xe8            ; call
+        mov rax, [current_offset]
+        add rax, 8                            ; 8 is the size of the xchg and call instructions
+                                              ; (call will be relative to next instruction)
+        sub rdx, rax                          ; this will result in a relative jump to the word code
+        mov dword [scratch+4], edx            ; sub-routine address
+        mov byte [scratch+8], 0x48           ; xchg ...
+        mov word [scratch+9], 0xe587         ; ... rbp, rsp
+        tail_codegen 11
 .try_builtins:
 ; rbx <- current builtin index
         mov rbx, 0
@@ -362,6 +396,54 @@ compile:
 .number_not_found:
         exit UNKNOWN_WORD_ERROR
 
+; find a dictionary entry
+;
+; ### pre
+; expects:
+;   - rdi = pointer to the token name
+;   - rsi = length of the token
+;  
+; ### post
+; destroys:
+;   - rax, rcx, rdx
+;
+; returns:
+;   - rdx = address of the entry found or -1 if not found
+find_dict:
+        push rsi                    ; save token length
+        mov rdx, dict
+        mov rcx, [dict_len]
+.dict_loop:
+        test rcx, rcx
+        jz .not_found               ; we decrement `rcx`, if 0 then not found
+; compare size
+        movzx rbx, byte [rdx]       ; first data in an entry is the length
+        cmp rbx, rsi
+        jne .not_equal
+; compare string
+.cmp_string_loop:
+        test rsi, rsi
+        jz .found
+        mov bl, byte [rdi + rsi - 1]
+        cmp bl, byte [rdx + 1 + rsi - 1]
+        jne .not_equal
+        dec rsi
+        jmp .cmp_string_loop
+.not_equal:
+        add rdx, dict_entry_len    ; save current entry
+        dec rcx
+        jmp .dict_loop
+.not_found:
+        pop rsi                    ; restore token length
+        mov rdx, -1
+        ret
+.found:
+        pop rsi                    ; restore token length
+        inc rdx                    ; step over the token len (1 byte)
+        add rdx, MAX_TOKEN_SIZE    ; step over the token name (MAX_TOKEN_SIZE bytes)
+        mov rdx, [rdx]             ; we want the content, aka the pointer value
+        ret
+
 ; add an entry to the dictionary
 ;
 ; ### pre
@@ -372,27 +454,32 @@ compile:
 ;  
 ; ### post
 ; destroys:
-;   - rax, rcx, rdx, rdi, rsi
+;   - rax, rbx, rcx, rdx, rdi, rsi
 add_dict:
         push rsi
         push rdi
+        push rdx
 ; change some registers so we can use `rep movsb` and others later on
         mov rcx, rsi             ; rci should contain token length
         mov rsi, rdi             ; rsi should contain token ptr
 ; 
         lea rdi, [dict]          ; rdi should contain the dict addr
         mov rax, [dict_len]
-        mov rdx, dict_entry_len
-        mul rdx                  ; rax = offset of new token multiple of `dict_entry_len`
+        mov rbx, dict_entry_len
+        mul rbx                  ; rax = offset of new token multiple of `dict_entry_len`
         add rdi, rax             ; rdi = points to an empty entry, to be filled with the `token` info
 ; write token name_len 
-        mov [rdi + 0], rcx
+        mov [rdi + 0], cl
+        inc rdi
 ; write token name
         push rcx
         rep movsb                ; Copy token name, using RSI (ptr) + RCX (len)  for source
         pop rcx
+        add rdi, MAX_TOKEN_SIZE
+        sub rdi, rcx             ; substract the amount of bytes copied by `rep movsb`
 ; write code_ptr
-        mov [rdi + MAX_TOKEN_SIZE + 8], rdx
+        pop rdx
+        mov qword [rdi], rdx
 ; increment the number of dict entries
         inc qword [dict_len]
         pop rdi
@@ -426,36 +513,116 @@ output_scratch:
 compile_colon:
         call read_token
         debug_token string, [string_idx]
-        mov rdx, [current_offset]
+        mov rdx, qword [current_offset]
         call add_dict
 ; check if token has length 4 and is "main"
         mov rbx, rsi
         cmp rbx, 4
         jne .not_main
         mov bl, byte [rdi + 0]
-        cmp bl, "m"
+        cmp bl, byte [main_name + 0]
         jne .not_main
         mov bl, byte [rdi + 1]
-        cmp bl, "a"
+        cmp bl, byte [main_name + 1]
         jne .not_main
         mov bl, byte [rdi + 2]
-        cmp bl, "i"
+        cmp bl, byte [main_name + 2]
         jne .not_main
         mov bl, byte [rdi + 3]
-        cmp bl, "n"
+        cmp bl, byte [main_name + 3]
         jne .not_main
         jmp .is_main
 .not_main:
+; swap rbp <=> rsp, this way the stack pointer points to the start of the `data` stack
+; and we are prepared to execute code and push data into it
         mov byte [scratch+0], 0x48   ; xchg ...
         mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
         tail_codegen 3
 .is_main:
+; instead of the usual `function` preamble, we need to create the `data` stack and the
+; memory stack (TODO)
+        mov rax, DATA_STACK_LEN
+        call mmap_codegen
+        ; lea    rbp,[rax+0x800]
+        ; 48 8d a8 00 08 00 00
+        mov byte  [scratch+0], 0x48
+        mov word  [scratch+1], 0xa88d
+        mov dword [scratch+3], DATA_STACK_LEN
+        codegen 7
+; memory stack (TODO)
+        ret
+
+mmap_codegen:
+        push rax ; save rax because it gets destroyed by `codegen`
+        ; SYS_MMAP
+        ; mov    rax,0x9
+        ; 48 c7 c0 09 00 00 00
+        mov byte  [scratch+0], 0x48
+        mov word  [scratch+1], 0xc0c7
+        mov dword [scratch+3], SYS_MMAP
+        codegen 7
+
+        ; Address
+        ; xor    rdi,rdi
+        ; 48 31 ff
+        mov byte  [scratch+0], 0x48
+        mov word  [scratch+1], 0xff31
+        codegen 3
+
+        pop rax ; restore rax
+        ; Size (passed in `rax`)
+        ; mov    rsi, `rax at comptime`
+        ; 48 c7 c6 ?? ?? ?? ??
+        mov byte  [scratch+0], 0x48
+        mov word  [scratch+1], 0xc6c7
+        mov dword [scratch+3], eax
+        codegen 7
+
+        ; Protection => 3 ( PROT_READ | PROT_WRITE )
+        ; mov    rdx,0x3
+        ; 48 c7 c2 03 00 00 00
+        mov byte  [scratch+0], 0x48
+        mov word  [scratch+1], 0xc2c7
+        mov dword [scratch+3], 3
+        codegen 7
+
+        ; Flags => 0x22 ( MAP_PRIVATE | MAP_ANONYMOUS )
+        ; mov    r10,0x22
+        ; 49 c7 c2 22 00 00 00
+        mov byte  [scratch+0], 0x49
+        mov word  [scratch+1], 0xc2c7
+        mov dword [scratch+3], 0x22
+        codegen 7
+
+        ; fd => -1 (anonymous)
+        ; mov    r8,0xffffffffffffffff
+        ; 49 c7 c0 ff ff ff ff
+        mov byte  [scratch+0], 0x49
+        mov word  [scratch+1], 0xc0c7
+        mov dword [scratch+3], -1
+        codegen 7
+
+        ; offset => 0
+        ; xor    r9,r9
+        ; 4d 31 c9
+        mov byte  [scratch+0], 0x4d
+        mov word  [scratch+1], 0xc931
+        codegen 3
+
+        ; syscall
+        ; 0f 05
+        mov word  [scratch+0], 0x050f
+        codegen 2
+
         ret
         
 compile_semicolon:
+; swap rbp <=> rsp, this way the stack pointer points to the start of the `address` stack
+; and we are prepared to jump out of the function
         mov byte [scratch+0], 0x48   ; xchg ...
         mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
-        tail_codegen 3
+        mov byte [scratch+3], 0xc3   ; ret
+        tail_codegen 4
  
 compile_plus:
         mov byte [scratch+0], 0x5b   ; pop rbx
@@ -527,7 +694,7 @@ dict_len: rq 1
 ; only used to calculate the len
 ; left for documentation purposes
 dict_entry:
-        name_len rq 1
+        name_len rb 1
         name rb MAX_TOKEN_SIZE
         code_ptr rq 1
 dict_entry_len = $ - dict_entry
@@ -536,6 +703,8 @@ dict_entry_len = $ - dict_entry
 section '.rodata'
 
 output: db "build/goburin_forth", 0
+main_name: db "main"
+main_name_len = $ - main_name
 
 ; string `constants`
 newline: db 10
@@ -650,4 +819,3 @@ builtins:
 
 ; end of built-ins
         db 0
-
