@@ -141,13 +141,13 @@ _start:
         jmp .failed_finding_main
 .main_found:
         sub rdx, [current_offset]
-        sub rdx, 9                          ; ??? TODO: i need to understand this
-        push rdx
-        mov byte [scratch + 0], 0xe9
-        mov qword [scratch + 1], rdx        ; addresses are 8 bytes 
-        codegen 9
-.patch_header:
+        sub rdx, 5                          ; jmp instruction is 5 bytes 
+        push rdx                            ; save rdx
+        mov byte  [scratch + 0], 0xe9       ; jmp ...
+        mov dword [scratch + 1], edx        ; ... addresses are 8 bytes but jumping w/ 4 byte offset
+        codegen 5
 
+.patch_header:
 ; seek 'filesz' in `output`
         mov rbx, offset_filesz 
         lseek [output_fd], rbx, 0 
@@ -170,7 +170,7 @@ _start:
         jz .failed_lseek
 
 ; patch `entry`
-        pop rdx
+        pop rdx                        ; restore rdx
         mov rax, 0x400000
         add rax, elf_header_len + program_header_len + data_header_len + 16
         add rax, [current_offset]
@@ -539,6 +539,7 @@ compile_colon:
         mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
         tail_codegen 3
 .is_main:
+        mov [is_main], byte 1
 ; instead of the usual `function` preamble, we need to create the `data` stack and the
 ; memory stack (TODO)
         mov rax, DATA_STACK_LEN
@@ -616,13 +617,20 @@ mmap_codegen:
 
         ret
         
+; size 1
 compile_semicolon:
+        mov rax, [is_main]
+        test rax, rax
+        jnz .is_main
 ; swap rbp <=> rsp, this way the stack pointer points to the start of the `address` stack
 ; and we are prepared to jump out of the function
         mov byte [scratch+0], 0x48   ; xchg ...
         mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
         mov byte [scratch+3], 0xc3   ; ret
         tail_codegen 4
+.is_main:
+        mov [is_main], byte 0
+        jmp compile_exit
  
 compile_plus:
         mov byte [scratch+0], 0x5b   ; pop rbx
@@ -658,10 +666,7 @@ compile_divide:
         mov byte [scratch+8], 0x50   ; push   rax
         tail_codegen 9
 
-compile_ret:
-        mov byte [scratch+0], 0xC3   ; ret
-        tail_codegen 1
-
+; size 4
 compile_exit:
         ; 58 48 89 c7 48 c7 c0 3c 00 00 00 0f 05 c3
         mov byte [scratch+0],  0x58           ; pop rax
@@ -672,6 +677,34 @@ compile_exit:
         mov word [scratch+11], 0x050F         ; syscall        
         mov byte [scratch+13], 0xC3           ; ret
         tail_codegen 14
+
+compile_qret:
+        mov byte  [scratch+0], 0x58    ; pop rax
+        mov byte  [scratch+1], 0x48    ; test ...
+        mov word  [scratch+2], 0xc085  ; ... rax, rax
+        mov word  [scratch+4], 0x840f  ; jz ...
+        mov dword [scratch+6], 4       ; ... +4 (after ret)
+        mov byte  [scratch+10], 0x48   ; xchg ...
+        mov word  [scratch+11], 0xe587 ; ... rbp, rsp (function preamble)
+        mov byte  [scratch+13], 0xC3   ; ret
+        tail_codegen 14
+
+; size 5
+compile_qexit:
+        mov byte  [scratch+0], 0x58           ; pop rax
+        mov byte  [scratch+1], 0x48           ; test ...
+        mov word  [scratch+2], 0xc085         ; ... rax, rax
+        mov word  [scratch+4], 0x840f         ; jz ...
+        mov dword [scratch+6], 14             ; ... +14 (after exit)
+; exit call
+        mov byte  [scratch+10],  0x58         ; pop rax
+        mov word  [scratch+11],  0x8948       ; ... ??
+        mov word  [scratch+13],  0x48C7       ; mov rdi, rax
+        mov dword [scratch+15], 0x003cC0C7    ; mov rax, SYS_EXIT
+        mov word  [scratch+19],  0x0000       ; ... padding
+        mov word  [scratch+21], 0x050F        ; syscall        
+        mov byte  [scratch+23], 0xC3          ; ret
+        tail_codegen 24
 
 ;;; DATA SECTION
 ;;; -- WRITABLE
@@ -690,6 +723,8 @@ base: db 16
 
 dict: rb dict_entry_len * MAX_DICT_ENTRIES
 dict_len: rq 1
+
+is_main: db 0
 
 ; only used to calculate the len
 ; left for documentation purposes
@@ -810,12 +845,14 @@ builtins:
         dq compile_multiply
         dq "/"
         dq compile_divide
-; size 3
-        dq "ret" 
-        dq compile_ret
 ; size 4
         dq "exit" 
         dq compile_exit
+        dq "?ret" 
+        dq compile_qret
+; size 5
+        dq "?exit" 
+        dq compile_qexit
 
 ; end of built-ins
         db 0

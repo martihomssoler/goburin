@@ -2,12 +2,12 @@
    34 35 +
 ;
 
-: threes
-   3 3 3
+: aux
+   result
+   0 ?exit \ exit if 1 != 0 (bc 0 is false)
 ;
 
 : main
-   threes * *
-   result +
-   exit
+   aux
+   0
 ;
