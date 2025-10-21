@@ -630,7 +630,16 @@ compile_semicolon:
         tail_codegen 4
 .is_main:
         mov [is_main], byte 0
-        jmp compile_exit
+; exit call
+        mov byte  [scratch+0],  0x58          ; pop rax
+        mov byte  [scratch+1],  0x48          ; mov rdi ...
+        mov word  [scratch+2],  0xc789        ; ... rax
+        mov byte  [scratch+4],  0x48          ; mov ...
+        mov word  [scratch+5],  0xc0c7        ; ... rax ...
+        mov dword [scratch+7],  SYS_EXIT      ; ... SYS_EXIT
+        mov word  [scratch+11], 0x050f        ; syscall        
+        mov byte  [scratch+13], 0xc3          ; ret
+        tail_codegen 14
  
 compile_plus:
         mov byte [scratch+0], 0x5b   ; pop rbx
@@ -666,44 +675,46 @@ compile_divide:
         mov byte [scratch+8], 0x50   ; push   rax
         tail_codegen 9
 
+compile_eqzero:
+        mov byte  [scratch+0],  0x58     ; pop rax
+        mov byte  [scratch+1],  0x48     ; test ...
+        mov word  [scratch+2],  0xc085   ; ... rax, rax
+        mov word  [scratch+4],  0x840f   ; jz ...
+        mov dword [scratch+6],  7        ; ... +7 (after jmp)
+        mov word  [scratch+10], 0x016a   ; push 1
+        mov byte  [scratch+12], 0xe9     ; jmp ...
+        mov dword [scratch+13], 2        ; ... +2 (after push 0)
+        mov word  [scratch+17], 0x006a   ; push 0 
+        tail_codegen 19
+        
 ; size 4
-compile_exit:
-        ; 58 48 89 c7 48 c7 c0 3c 00 00 00 0f 05 c3
-        mov byte [scratch+0],  0x58           ; pop rax
-        mov word [scratch+1],  0x8948         ; ... ??
-        mov word [scratch+3],  0x48C7         ; mov rdi, rax
-        mov dword [scratch+5], 0x003cC0C7     ; mov rax, SYS_EXIT
-        mov word [scratch+9],  0x0000         ; ... padding
-        mov word [scratch+11], 0x050F         ; syscall        
-        mov byte [scratch+13], 0xC3           ; ret
-        tail_codegen 14
-
 compile_qret:
-        mov byte  [scratch+0], 0x58    ; pop rax
-        mov byte  [scratch+1], 0x48    ; test ...
-        mov word  [scratch+2], 0xc085  ; ... rax, rax
-        mov word  [scratch+4], 0x840f  ; jz ...
-        mov dword [scratch+6], 4       ; ... +4 (after ret)
-        mov byte  [scratch+10], 0x48   ; xchg ...
-        mov word  [scratch+11], 0xe587 ; ... rbp, rsp (function preamble)
-        mov byte  [scratch+13], 0xC3   ; ret
+        mov byte  [scratch+0], 0x58      ; pop rax
+        mov byte  [scratch+1], 0x48      ; test ...
+        mov word  [scratch+2], 0xc085    ; ... rax, rax
+        mov word  [scratch+4], 0x840f    ; jz ...
+        mov dword [scratch+6], 4         ; ... +4 (after ret)
+        mov byte  [scratch+10], 0x48     ; xchg ...
+        mov word  [scratch+11], 0xe587   ; ... rbp, rsp (function preamble)
+        mov byte  [scratch+13], 0xC3     ; ret
         tail_codegen 14
 
 ; size 5
 compile_qexit:
-        mov byte  [scratch+0], 0x58           ; pop rax
-        mov byte  [scratch+1], 0x48           ; test ...
-        mov word  [scratch+2], 0xc085         ; ... rax, rax
-        mov word  [scratch+4], 0x840f         ; jz ...
-        mov dword [scratch+6], 14             ; ... +14 (after exit)
+        mov byte  [scratch+0], 0x58      ; pop rax
+        mov byte  [scratch+1], 0x48      ; test ...
+        mov word  [scratch+2], 0xc085    ; ... rax, rax
+        mov word  [scratch+4], 0x840f    ; jz ...
+        mov dword [scratch+6], 14        ; ... +14 (after exit)
 ; exit call
-        mov byte  [scratch+10],  0x58         ; pop rax
-        mov word  [scratch+11],  0x8948       ; ... ??
-        mov word  [scratch+13],  0x48C7       ; mov rdi, rax
-        mov dword [scratch+15], 0x003cC0C7    ; mov rax, SYS_EXIT
-        mov word  [scratch+19],  0x0000       ; ... padding
-        mov word  [scratch+21], 0x050F        ; syscall        
-        mov byte  [scratch+23], 0xC3          ; ret
+        mov byte  [scratch+10], 0x58     ; pop rax
+        mov byte  [scratch+11], 0x48     ; mov rdi ...
+        mov word  [scratch+12], 0xc789   ; ... rax
+        mov byte  [scratch+14], 0x48     ; mov ...
+        mov word  [scratch+15], 0xc0c7   ; ... rax ...
+        mov dword [scratch+17], SYS_EXIT ; ... SYS_EXIT
+        mov word  [scratch+21], 0x050f   ; syscall        
+        mov byte  [scratch+23], 0xc3     ; ret
         tail_codegen 24
 
 ;;; DATA SECTION
@@ -845,9 +856,10 @@ builtins:
         dq compile_multiply
         dq "/"
         dq compile_divide
+; size 2
+        dq "=0"
+        dq compile_eqzero
 ; size 4
-        dq "exit" 
-        dq compile_exit
         dq "?ret" 
         dq compile_qret
 ; size 5

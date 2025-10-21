@@ -9,5 +9,4 @@
 : main
    threes * *
    result +
-   exit
 ;
