@@ -46,7 +46,7 @@ wrun:
     watchexec -c -e asm -r -- just run
 
 wverify:
-    watchexec -c -e asm -r -- just verify
+    watchexec -c -e asm -e forth -r -- just verify
 
 wtest:
     watchexec -c -r -- just test

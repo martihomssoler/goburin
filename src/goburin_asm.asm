@@ -41,6 +41,7 @@ format ELF64
         MAX_DICT_ENTRIES equ 255
         MAX_TOKEN_SIZE   equ 32
         DATA_STACK_LEN   equ 2048
+        MEMORY_BLOCK_LEN equ 8192
 ;;; macros
 
 macro syscall1 value, arg1 {
@@ -74,7 +75,7 @@ macro tail_codegen size {
 }
 
 macro debug_token token, token_len {
-if 0
+if 1
         push rdi
         push rsi
         push rbx
@@ -118,7 +119,6 @@ _start:
         write [output_fd], elf_header, elf_header_len + program_header_len + data_header_len + 16
         test rax, rax
         jz .failed_write
-; TODO: entry_point patching
 ; compilation loop
 .loop:
         call read_token
@@ -218,7 +218,7 @@ read_token:
 ; advance index
         inc rsi
 ; check for `whitespaces`
-        cmp rbx, " "; is char an ASCII 'control' char + space, aka less than space=32
+        cmp rbx, 0x20; is char an ASCII 'control' char + space, aka less than 0x20 => 32
         jle .whitespace
 ; check for '\' comment
         cmp rbx, "\"
@@ -305,6 +305,7 @@ compile_token:
         tail_codegen 11
 .try_builtins:
 ; rbx <- current builtin index
+        xor rax, rax
         mov rbx, 0
 .builtins_loop:
         mov al, byte [builtins + rbx]         ; builtins[curr_word] == ...
@@ -414,6 +415,8 @@ find_dict:
         mov rdx, dict
         mov rcx, [dict_len]
 .dict_loop:
+        pop rsi                     ; we need to do this pop/push dance to restore ...
+        push rsi                    ; ... the token length
         test rcx, rcx
         jz .not_found               ; we decrement `rcx`, if 0 then not found
 ; compare size
@@ -425,7 +428,7 @@ find_dict:
         test rsi, rsi
         jz .found
         mov bl, byte [rdi + rsi - 1]
-        cmp bl, byte [rdx + 1 + rsi - 1]
+        cmp bl, byte [rdx + 1 + rsi - 1] ; (rdx + 1) is the dict entry name
         jne .not_equal
         dec rsi
         jmp .cmp_string_loop
@@ -539,18 +542,30 @@ compile_colon:
         mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
         tail_codegen 3
 .is_main:
-        mov [is_main], byte 1
 ; instead of the usual `function` preamble, we need to create the `data` stack and the
-; memory stack (TODO)
+; memory stack
+        mov [is_main], byte 1
+; NOTE: data stack
         mov rax, DATA_STACK_LEN
         call mmap_codegen
-        ; lea    rbp,[rax+0x800]
-        ; 48 8d a8 00 08 00 00
+; lea rbp, [rax+0x800] => 48 8d a8 00 08 00 00
         mov byte  [scratch+0], 0x48
         mov word  [scratch+1], 0xa88d
         mov dword [scratch+3], DATA_STACK_LEN
         codegen 7
-; memory stack (TODO)
+; NOTE: memory block hold in `r15`
+; push rbp
+        mov byte  [scratch+0], 0x55
+        codegen 1
+        mov rax, MEMORY_BLOCK_LEN
+        call mmap_codegen
+; mov r15, rax
+        mov byte  [scratch+0], 0x49
+        mov word  [scratch+1], 0xc789
+        codegen 3
+; pop rbp
+        mov byte  [scratch+0], 0x5d 
+        codegen 1
         ret
 
 mmap_codegen:
@@ -675,6 +690,20 @@ compile_divide:
         mov byte [scratch+8], 0x50   ; push   rax
         tail_codegen 9
 
+compile_fetch:
+        mov byte  [scratch+0],  0x58     ; pop rax
+        mov byte  [scratch+1],  0xff     ; push ...
+        mov word  [scratch+2],  0x0870   ; ... qword [rax]
+        tail_codegen 4
+
+compile_store:
+        mov byte  [scratch+0], 0x58      ; pop rax
+        mov byte  [scratch+1], 0x5b      ; pop rbx
+        mov byte  [scratch+2], 0x48      ; mov ...
+        mov word  [scratch+3], 0x1889    ; ... qword [rax], rbx
+        tail_codegen 5
+
+; size 2
 compile_eqzero:
         mov byte  [scratch+0],  0x58     ; pop rax
         mov byte  [scratch+1],  0x48     ; test ...
@@ -687,6 +716,27 @@ compile_eqzero:
         mov word  [scratch+17], 0x006a   ; push 0 
         tail_codegen 19
         
+; size 3
+compile_ps_fetch:
+        mov byte  [scratch+0],  0x54     ; push rsp
+        tail_codegen 1
+
+compile_ps_store:
+        mov byte  [scratch+0],  0x5c     ; pop rsp
+        tail_codegen 1
+
+compile_rs_fetch:
+        mov byte  [scratch+0],  0x55     ; push rbp
+        tail_codegen 1
+
+compile_rs_store:
+        mov byte  [scratch+0],  0x5d     ; pop rbp
+        tail_codegen 1
+
+compile_mem:
+        mov word [scratch+0],  0x5741    ; push r15
+        tail_codegen 2
+
 ; size 4
 compile_qret:
         mov byte  [scratch+0], 0x58      ; pop rax
@@ -840,8 +890,6 @@ offset_filesz = 32 + elf_header_len
 ; - 64 bits for the "keyword"
 ; - 64 bits to the routine that compiles it
 ; 
-; NOTE: builtin words cannot have substrings, so they need to be unique!
-; Cannot have two words, one being a substring of another like "str" and "string"!
 builtins:
 ; size 1
         dq ":"
@@ -856,9 +904,24 @@ builtins:
         dq compile_multiply
         dq "/"
         dq compile_divide
+        dq "@"
+        dq compile_fetch
+        dq "!"
+        dq compile_store
 ; size 2
         dq "=0"
         dq compile_eqzero
+; size 3
+        dq "ps@"
+        dq compile_ps_fetch
+        dq "ps!"
+        dq compile_ps_store
+        dq "rs@"
+        dq compile_rs_fetch
+        dq "rs!"
+        dq compile_rs_store
+        dq "mem"
+        dq compile_mem
 ; size 4
         dq "?ret" 
         dq compile_qret
