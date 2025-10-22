@@ -7,7 +7,7 @@ format ELF64
         STDOUT    equ 1
         STDERR    equ 2
 
-        ;;; SYSCALLS NUMBERS
+        ;;; SYSCALL NUMBERS
         SYS_READ  equ 0
         SYS_WRITE equ 1
         SYS_OPEN  equ 2
@@ -554,7 +554,6 @@ compile_colon:
 .is_main:
 ; instead of the usual `function` preamble, we need to create the `data` stack and the
 ; memory stack
-        mov [is_main], byte 1
 ; NOTE: data stack
         mov rax, DATA_STACK_LEN
         call mmap_codegen
@@ -643,27 +642,12 @@ mmap_codegen:
         
 ; size 1
 compile_semicolon:
-        mov rax, [is_main]
-        test rax, rax
-        jnz .is_main
 ; swap rbp <=> rsp, this way the stack pointer points to the start of the `address` stack
 ; and we are prepared to jump out of the function
         mov byte [scratch+0], 0x48   ; xchg ...
         mov word [scratch+1], 0xe587 ; ... rbp, rsp (function preamble)
         mov byte [scratch+3], 0xc3   ; ret
         tail_codegen 4
-.is_main:
-        mov [is_main], byte 0
-; exit call
-        mov byte  [scratch+0],  0x58          ; pop rax
-        mov byte  [scratch+1],  0x48          ; mov rdi ...
-        mov word  [scratch+2],  0xc789        ; ... rax
-        mov byte  [scratch+4],  0x48          ; mov ...
-        mov word  [scratch+5],  0xc0c7        ; ... rax ...
-        mov dword [scratch+7],  SYS_EXIT      ; ... SYS_EXIT
-        mov word  [scratch+11], 0x050f        ; syscall        
-        mov byte  [scratch+13], 0xc3          ; ret
-        tail_codegen 14
  
 compile_plus:
         mov byte [scratch+0], 0x5b   ; pop rbx
@@ -713,16 +697,16 @@ compile_store:
         tail_codegen 5
 
 ; size 2
-compile_eqzero:
+compile_less_zero:
         mov byte  [scratch+0],  0x58     ; pop rax
         mov byte  [scratch+1],  0x48     ; test ...
         mov word  [scratch+2],  0xc085   ; ... rax, rax
-        mov word  [scratch+4],  0x840f   ; jz ...
+        mov word  [scratch+4],  0x890f   ; jns ...
         mov dword [scratch+6],  7        ; ... +7 (after jmp)
-        mov word  [scratch+10], 0x016a   ; push 1
+        mov word  [scratch+10], 0x016a   ; push 1 (true)
         mov byte  [scratch+12], 0xe9     ; jmp ...
         mov dword [scratch+13], 2        ; ... +2 (after push 0)
-        mov word  [scratch+17], 0x006a   ; push 0 
+        mov word  [scratch+17], 0x006a   ; push 0 (false)
         tail_codegen 19
         
 ; size 3
@@ -776,6 +760,64 @@ compile_qexit:
         mov byte  [scratch+23], 0xc3     ; ret
         tail_codegen 24
 
+; size 8
+compile_syscall1:
+        mov byte [scratch+0], 0x58     ; pop rax
+        mov byte [scratch+1], 0x5f     ; pop rdi
+        mov word [scratch+2], 0x050f   ; syscall
+        mov byte [scratch+4], 0x50     ; push rax
+        tail_codegen 5
+
+compile_syscall2:
+        mov byte [scratch+0], 0x58     ; pop rax
+        mov byte [scratch+1], 0x5e     ; pop rsi
+        mov byte [scratch+2], 0x5f     ; pop rdi
+        mov word [scratch+3], 0x050f   ; syscall
+        mov byte [scratch+5], 0x50     ; push rax
+        tail_codegen 6
+
+compile_syscall3:
+        mov byte [scratch+0], 0x58     ; pop rax
+        mov byte [scratch+1], 0x5a     ; pop rdx
+        mov byte [scratch+2], 0x5e     ; pop rsi
+        mov byte [scratch+3], 0x5f     ; pop rdi
+        mov word [scratch+4], 0x050f   ; syscall
+        mov byte [scratch+6], 0x50     ; push rax
+        tail_codegen 7
+
+compile_syscall4:
+        mov byte [scratch+0], 0x58     ; pop rax
+        mov word [scratch+1], 0x5a41   ; pop r10
+        mov byte [scratch+3], 0x5a     ; pop rdx
+        mov byte [scratch+4], 0x5e     ; pop rsi
+        mov byte [scratch+5], 0x5f     ; pop rdi
+        mov word [scratch+6], 0x050f   ; syscall
+        mov byte [scratch+8], 0x50     ; push rax
+        tail_codegen 9
+
+compile_syscall5:
+        mov byte [scratch+0],  0x58    ; pop rax
+        mov word [scratch+1],  0x5841  ; pop r8
+        mov word [scratch+3],  0x5a41  ; pop r10
+        mov byte [scratch+5],  0x5a    ; pop rdx
+        mov byte [scratch+6],  0x5e    ; pop rsi
+        mov byte [scratch+7],  0x5f    ; pop rdi
+        mov word [scratch+8],  0x050f  ; syscall
+        mov byte [scratch+10], 0x50    ; push rax
+        tail_codegen 11
+
+compile_syscall6:
+        mov byte [scratch+0],  0x58    ; pop rax
+        mov word [scratch+1],  0x5941  ; pop r9
+        mov word [scratch+3],  0x5841  ; pop r8
+        mov word [scratch+5],  0x5a41  ; pop r10
+        mov byte [scratch+7],  0x5a    ; pop rdx
+        mov byte [scratch+8],  0x5e    ; pop rsi
+        mov byte [scratch+9],  0x5f    ; pop rdi
+        mov word [scratch+10], 0x050f  ; syscall
+        mov byte [scratch+12], 0x50    ; push rax
+        tail_codegen 13
+ 
 ;;; DATA SECTION
 ;;; -- WRITABLE
 section '.data' writable
@@ -793,8 +835,6 @@ base: db 16
 
 dict: rb dict_entry_len * MAX_DICT_ENTRIES
 dict_len: rq 1
-
-is_main: db 0
 
 ; only used to calculate the len
 ; left for documentation purposes
@@ -918,8 +958,8 @@ builtins:
         dq "!"
         dq compile_store
 ; size 2
-        dq "=0"
-        dq compile_eqzero
+        dq "<0"
+        dq compile_less_zero
 ; size 3
         dq "ps@"
         dq compile_ps_fetch
@@ -937,6 +977,19 @@ builtins:
 ; size 5
         dq "?exit" 
         dq compile_qexit
+; size 8
+        dq "syscall1"
+        dq compile_syscall1
+        dq "syscall2"
+        dq compile_syscall2
+        dq "syscall3"
+        dq compile_syscall3
+        dq "syscall4"
+        dq compile_syscall4
+        dq "syscall5"
+        dq compile_syscall5
+        dq "syscall6"
+        dq compile_syscall6
 
 ; end of built-ins
         db 0
