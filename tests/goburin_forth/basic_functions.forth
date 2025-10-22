@@ -1,3 +1,5 @@
+: exit ( x -- ) 60 syscall1 ;
+
 : result
    34 35 +
 ;
@@ -9,4 +11,5 @@
 : main
    threes * *
    result +
+   exit
 ;

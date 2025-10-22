@@ -117,7 +117,7 @@ _start:
 ; write elf header
 ; we need to add padding because we hardcoded that our `starting address` is in C0h
 ; we should be now at B0h, so we just need to add 16 bytes
-        write [output_fd], elf_header, elf_header_len + program_header_len + data_header_len + 16
+        write [output_fd], elf_header, all_headers_len
         test rax, rax
         jz .failed_write
 ; compilation loop
@@ -157,7 +157,7 @@ _start:
 
 ; patch `filesz`
         mov rax, [current_offset]
-        add rax, elf_header_len + program_header_len + data_header_len + 16
+        add rax, all_headers_len
         mov [scratch], qword rax
         codegen 8                      ; write to `filesz` field
         codegen 8                      ; write the same value to `memsz` field since the fd head moved
@@ -173,7 +173,7 @@ _start:
 ; patch `entry`
         pop rdx                        ; restore rdx
         mov rax, 0x400000
-        add rax, elf_header_len + program_header_len + data_header_len + 16
+        add rax, all_headers_len
         add rax, [current_offset]
         add rax, rdx
         mov qword [scratch], rax
@@ -924,23 +924,7 @@ program_header:
         dq 0x1000                                 ; (q) p_align     => Segment alignment
 program_header_len = $ - program_header
 
-data_header:
-        dd 01h                                    ; (d) p_type      => Segment type (PT_LOAD)
-        dd 04h                                    ; (d) p_flags     => Segment flags (READ)
-        dq 00h                                    ; (q) p_offset    => Segment file offset
-        dq DATA_ADDR                              ; (q) p_vaddr     => Segment virtual address
-        dq 00h                                    ; (q) p_paddr     => Segment physical address
-        dq 0100h                                  ; (q) p_filesz    => Segment size in file              -- TO BE PATCHED
-        ;  ^-- (32 bytes offset)
-        dq 0100h                                  ; (q) p_memsz     => Segment size in memory            -- TO BE PATCHED
-        ;  ^-- (40 bytes offset)
-        dq 0x1000                                 ; (q) p_align     => Segment alignment
-data_header_len = $ - data_header
-
-; we need to padd by 16 bytes because we hardcoded that our `starting address`
-padding:
-        db 00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
-        db 00h, 00h, 00h, 00h, 00h, 00h, 00h, 00h
+all_headers_len = elf_header_len + program_header_len
 
 offset_entry  = 24
 offset_filesz = 32 + elf_header_len
