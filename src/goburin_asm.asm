@@ -76,7 +76,7 @@ macro tail_codegen size {
 }
 
 macro debug_token token, token_len {
-if 1
+if 0
         push rdi
         push rsi
         push rbx
@@ -321,7 +321,7 @@ compile_token:
 .builtins_loop:
         mov al, byte [builtins + rbx]         ; builtins[curr_word] == ...
         cmp al, 0                             ; end of builtins?
-        je .try_number
+        je .try_char_literals
 ; rcx <- current index for word comparison
         mov rcx, 0
 .builtins_token_loop:
@@ -344,6 +344,17 @@ compile_token:
 .builtins_found:
         mov rax, [builtins + rbx + 8]   ; we want to get the address of the builtin word
         jmp qword rax
+
+.try_char_literals:
+        mov rcx, 3      ; size of a char literal 
+        cmp rcx, rsi
+        jne .try_number
+        cmp byte [rdi], "'"
+        jne .try_number
+        cmp byte [rdi+2], "'"
+        jne .try_number
+        movzx rbx, byte [rdi+1]
+        jmp .number_found
 
 ; number
 ; we parse the number from right to left
