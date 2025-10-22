@@ -224,6 +224,8 @@ read_token:
 ; check for '\' comment
         cmp rbx, "\"
         je .comment
+        cmp rbx, "("
+        je .parenthesis
 ; char is valid
 ; write char to `string`
         mov rdi, string
@@ -247,9 +249,17 @@ read_token:
         jz .eof
 ; check if newline
         cmp rbx, 10 ; newline value is 10
-        je .newline
+        je .continue
         jmp .comment
-.newline:
+.parenthesis:
+; keep advancing the index until we get EOF or a ")"
+        call read_stdin
+        jz .eof
+; check if ")"
+        cmp rbx, ")" ; newline value is 10
+        je .continue
+        jmp .parenthesis
+.continue:
 ; we jump back to the beginning of this function, resetting the string
         jmp read_token
 .eof:
