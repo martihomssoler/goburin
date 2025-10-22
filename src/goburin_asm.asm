@@ -42,6 +42,7 @@ format ELF64
         MAX_TOKEN_SIZE   equ 32
         DATA_STACK_LEN   equ 2048
         MEMORY_BLOCK_LEN equ 8192
+
 ;;; macros
 
 macro syscall1 value, arg1 {
@@ -324,7 +325,6 @@ compile_token:
         cmp rcx, rsi
         je .builtins_found
 ; this means the token is exactly the builtin word we want
-; NOTE: builtin words cannot have substrings, so they need to be unique!
         jmp .builtins_token_loop
         
 .builtins_not_found:
@@ -554,17 +554,16 @@ compile_colon:
         mov dword [scratch+3], DATA_STACK_LEN
         codegen 7
 ; NOTE: memory block hold in `r15`
-; push rbp
-        mov byte  [scratch+0], 0x55
+        mov byte  [scratch+0], 0x55    ; push rbp
         codegen 1
         mov rax, MEMORY_BLOCK_LEN
         call mmap_codegen
-; mov r15, rax
-        mov byte  [scratch+0], 0x49
-        mov word  [scratch+1], 0xc789
+
+        mov byte  [scratch+0], 0x49    ; mov ...
+        mov word  [scratch+1], 0xc789  ; ... r15, rax
         codegen 3
-; pop rbp
-        mov byte  [scratch+0], 0x5d 
+
+        mov byte  [scratch+0], 0x5d    ; pop rbp
         codegen 1
         ret
 
@@ -693,14 +692,14 @@ compile_divide:
 compile_fetch:
         mov byte  [scratch+0],  0x58     ; pop rax
         mov byte  [scratch+1],  0xff     ; push ...
-        mov word  [scratch+2],  0x0870   ; ... qword [rax]
-        tail_codegen 4
+        mov byte  [scratch+2],  0x30   ; ... [rax]
+        tail_codegen 3
 
 compile_store:
         mov byte  [scratch+0], 0x58      ; pop rax
         mov byte  [scratch+1], 0x5b      ; pop rbx
         mov byte  [scratch+2], 0x48      ; mov ...
-        mov word  [scratch+3], 0x1889    ; ... qword [rax], rbx
+        mov word  [scratch+3], 0x1889    ; ... [rax], rbx
         tail_codegen 5
 
 ; size 2
