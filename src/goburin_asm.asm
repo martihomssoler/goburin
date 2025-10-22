@@ -36,7 +36,6 @@ format ELF64
 
         ;;; OTHERS
         ENTRY_ADDR  equ 0x00_00_40_00_00
-        DATA_ADDR   equ 0x00_00_60_00_00
 
         MAX_DICT_ENTRIES equ 255
         MAX_TOKEN_SIZE   equ 32
