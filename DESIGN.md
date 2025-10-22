@@ -2,13 +2,32 @@
 
 # Primitives
 
-All cells, aka variables, are 64-bit wide, aka quad-word.
+- `:`: start a word definition
+- `;`: end a word definition
+- `+`: add two integers
+- `-`: subtract two integers
+- `*`: multiply two integers
+- `/`: divide two integers
+- `@`: read the value of a cell (8 bytes) from memory
+- `!`: write a value to a cell (8 bytes) in memory
+- `0=`: put true (1) on the stack if current top of the stack is equal to zero, otherwise put false (0).
+- `ps@`: get the current value of the parameter stack pointer
+- `ps!`: write a new address to the parameter stack pointer
+- `rs@`: get the current value of the return stack pointer
+- `rs!`: write a new address to the parameter stack pointer
+- `mem`: give the pointer to the start of user memory
+- `?ret`: return current word if the top of stack is true (non zero)
+- `?exit`: exit current word if the top of stack is true (non zero)
 
-- `push` / `pop`: cell to/from the stack
-- `r>` / `>r`: cell to/from the return-stack
-- `.`: return current dictionary pointer
-- `,`: store cell at current dictionary pointer an increment the pointer
-- `load` / `store` cell from/to memory address
+## Future
+- `and`: bitwise AND two integers
+- `lsr`: logical right shift an integer
+- `syscall0`-`syscall6`: perform a Linux system call with 0 to 6 arguments.
+
+# Two Stacks
+
+- `rbp` and `rsp`: hold the data stack and the address stack
+- `r15`: holds the pointer to the memory block
 
 # Info Links
 
@@ -20,6 +39,7 @@ All cells, aka variables, are 64-bit wide, aka quad-word.
 - [ELF64 Object File Specification](https://irix7.com/techpubs/007-4658-001.pdf)
 - [Writing a Linux ELF Binary by Hand](https://www.youtube.com/watch?v=JM9jX2aqkog)
 - [Crafting executables from raw bytes - Kay Lack](https://www.youtube.com/watch?v=cX5tQJhuNeY) <- life saver!
+- [Online x86 Assembler](https://defuse.ca/online-x86-assembler.htm) <- life saver!
 - ...
 
 # Useful Tools
@@ -39,3 +59,8 @@ All cells, aka variables, are 64-bit wide, aka quad-word.
 - [Starforth v1 Source Code](https://git.sr.ht/~elektito/starforth/tree/ec7a4a14baa5faa79a7e3d65c9f68ef0734fc62b)
 - [Forget C - Assembly is All You Need](https://www.youtube.com/watch?v=hzjBdIJ9Ycs)
 - ...
+
+# Other Links
+
+- [Ratfactor Forth Article](https://ratfactor.com/forth/the_programming_language_that_writes_itself.html)
+- [Hacker News of Ratfactor Forth Article](https://news.ycombinator.com/item?id=45639250)
